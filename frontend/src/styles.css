@@ -1,15 +1,15 @@
 @import url("https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600&family=Manrope:wght@500;700;800&display=swap");
 
 :root {
-  --bg-0: #121315;
-  --bg-1: #17191c;
-  --bg-2: #1f2125;
-  --panel: #23262b;
-  --line: #3d4046;
-  --text: #e9ecef;
-  --muted: #9ca3ad;
-  --accent: #ff7a1a;
-  --accent-2: #8ad35b;
+  --bg-0: #0a0b0d;
+  --bg-1: #0f1114;
+  --bg-2: #15181c;
+  --panel: #121419;
+  --line: #2a2f36;
+  --text: #f5f7fa;
+  --muted: #8b95a3;
+  --accent: #ff8f2b;
+  --accent-2: #00e5ff;
   --danger: #ff5f58;
   --radius: 6px;
 }
@@ -23,10 +23,8 @@ body {
   font-family: "Manrope", sans-serif;
   color: var(--text);
   background:
-    linear-gradient(90deg, rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    linear-gradient(rgba(255, 255, 255, 0.03) 1px, transparent 1px),
-    radial-gradient(circle at 0% 0%, #2a2d33, #111214 45%, #0c0d0f 100%);
-  background-size: 24px 24px, 24px 24px, auto;
+    linear-gradient(180deg, #0a0b0d 0%, #0c0e12 30%, #0a0b0d 100%);
+  background-size: auto;
 }
 
 .page {
@@ -66,20 +64,20 @@ body {
   display: inline-block;
   margin-bottom: 12px;
   padding: 4px 8px;
-  border: 1px solid var(--line);
+  border: 1px solid #2a2f36;
   border-radius: 4px;
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.72rem;
-  color: var(--accent);
-  background: #181a1e;
+  color: var(--accent-2);
+  background: #0f1115;
 }
 
 .card {
-  background: linear-gradient(180deg, var(--panel), #1c1f24);
-  border: 1px solid var(--line);
+  background: var(--panel);
+  border: 1px solid #1d222a;
   border-radius: var(--radius);
   padding: 18px;
-  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+  box-shadow: 0 18px 36px rgba(0, 0, 0, 0.55);
 }
 
 label {
@@ -117,12 +115,12 @@ select {
   width: 100%;
   min-height: 42px;
   padding: 10px 12px;
-  border: 1px solid #4a4f57;
+  border: 1px solid #2a2f36;
   border-radius: 4px;
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.88rem;
   color: var(--text);
-  background: var(--bg-2);
+  background: #0f1216;
   outline: none;
 }
 
@@ -135,9 +133,9 @@ select:focus {
 button {
   min-height: 42px;
   padding: 10px 14px;
-  border: 1px solid #666c77;
+  border: 1px solid #2a2f36;
   border-radius: 4px;
-  background: linear-gradient(180deg, #3a3f48, #2f343c);
+  background: #151a20;
   color: #edf1f5;
   font-family: "IBM Plex Mono", monospace;
   font-size: 0.82rem;
@@ -148,7 +146,7 @@ button {
 }
 
 button:hover {
-  border-color: var(--accent);
+  border-color: var(--accent-2);
 }
 
 button:disabled {
@@ -162,16 +160,16 @@ button:disabled {
   display: grid;
   grid-template-columns: 80px 1fr;
   gap: 12px;
-  border: 1px solid #3f444c;
+  border: 1px solid #20252c;
   border-radius: 4px;
-  background: #1a1d22;
+  background: #0f1216;
 }
 
 .cover {
   width: 80px;
   height: 80px;
   border-radius: 4px;
-  border: 1px solid #4c525c;
+  border: 1px solid #2a2f36;
   object-fit: cover;
 }
 
@@ -216,13 +214,13 @@ button:disabled {
 .download {
   width: 100%;
   margin-top: 10px;
-  border-color: #5f7f48;
-  background: linear-gradient(180deg, #54763d, #425f31);
+  border-color: #1f2a2f;
+  background: #10161b;
 }
 
 .error {
   margin-top: 10px;
-  color: var(--danger);
+  color: #ff6b60;
   font-size: 0.84rem;
   font-family: "IBM Plex Mono", monospace;
 }
@@ -233,7 +231,7 @@ button:disabled {
 
 .hint {
   margin-top: 12px;
-  color: #9fa6b1;
+  color: #8b95a3;
   font-size: 0.78rem;
   font-family: "IBM Plex Mono", monospace;
 }

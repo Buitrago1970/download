@@ -25,6 +25,7 @@ export default function App() {
   const [includeLrc, setIncludeLrc] = useState(false);
   const [playlistJobId, setPlaylistJobId] = useState("");
   const [playlistJob, setPlaylistJob] = useState(null);
+  const [lastPayload, setLastPayload] = useState(null);
 
   useEffect(() => {
     if (!playlistJobId) return undefined;
@@ -58,6 +59,7 @@ export default function App() {
     setPlaylistJobId("");
     setPlaylistJob(null);
     setStatus("loading");
+    setLastPayload({ input, format, includeLrc });
     try {
       const data = await postJson("/api/preview", { input });
       setMeta(data);
@@ -77,7 +79,8 @@ export default function App() {
         body: JSON.stringify({ input, format, include_lrc: includeLrc })
       });
       if (!res.ok) {
-        throw new Error("Error en descarga");
+        const text = await res.text();
+        throw new Error(text || "Error en descarga");
       }
       const blob = await res.blob();
       const filename = getFileName(res.headers.get("Content-Disposition")) || "download.mp3";
@@ -89,9 +92,17 @@ export default function App() {
       link.remove();
       setStatus("done");
     } catch (err) {
-      setError("No pude procesar la entrada o descargar. Intenta de nuevo.");
+      setError(err?.message || "No pude procesar la entrada o descargar. Intenta de nuevo.");
       setStatus("idle");
     }
+  };
+
+  const handleRetry = async () => {
+    if (!lastPayload) return;
+    setInput(lastPayload.input || "");
+    setFormat(lastPayload.format || "best");
+    setIncludeLrc(Boolean(lastPayload.includeLrc));
+    await handleProcess();
   };
 
   return (
@@ -134,7 +145,16 @@ export default function App() {
             </label>
           </div>
           {info && <div className="hint">{info}</div>}
-          {error && <div className="error">{error}</div>}
+          {error && (
+            <div className="error">
+              {error}
+              <div style={{ marginTop: 10 }}>
+                <button onClick={handleRetry} disabled={!lastPayload}>
+                  Reintentar
+                </button>
+              </div>
+            </div>
+          )}
           {meta && (
             <div className="preview">
               {meta.cover_url && (

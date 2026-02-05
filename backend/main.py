@@ -40,6 +40,7 @@ SPOTIFY_TOKEN_CACHE: dict[str, float | str | None] = {"access_token": None, "exp
 PLAYLIST_JOBS: dict[str, dict] = {}
 PLAYLIST_JOBS_LOCK = threading.Lock()
 OUTPUT_FORMATS = {"best", "mp3", "m4a", "opus"}
+FALLBACK_FORMAT_ORDER = ["best", "m4a", "opus", "mp3"]
 _COOKIEFILE_CACHE_PATH: Optional[str] = None
 
 
@@ -818,6 +819,22 @@ def _download_audio(meta: MediaMeta, tmpdir: str, output_format: str = "best") -
     raise HTTPException(status_code=502, detail=detail)
 
 
+def _download_audio_with_fallback(meta: MediaMeta, tmpdir: str, preferred_format: str) -> str:
+    order = [fmt for fmt in FALLBACK_FORMAT_ORDER if fmt in OUTPUT_FORMATS]
+    last_error: Optional[HTTPException] = None
+    for fmt in order:
+        try:
+            return _download_audio(meta, tmpdir, output_format=fmt)
+        except HTTPException as exc:
+            if exc.status_code == 429:
+                raise
+            last_error = exc
+            continue
+    if last_error:
+        raise last_error
+    raise HTTPException(status_code=502, detail="YouTube download failed")
+
+
 def download_from_input(value: str, output_format: str = "best") -> tuple[str, MediaMeta, str]:
     meta = resolve_input(value)
     lyrics, source = _fetch_lyrics(meta)
@@ -825,7 +842,7 @@ def download_from_input(value: str, output_format: str = "best") -> tuple[str, M
     meta.lyrics_source = source
 
     with tempfile.TemporaryDirectory() as tmpdir:
-        file_path = _download_audio(meta, tmpdir, output_format=output_format)
+        file_path = _download_audio_with_fallback(meta, tmpdir, preferred_format=output_format)
         _embed_metadata(file_path, meta)
         ext = os.path.splitext(file_path)[1].lower() or ".bin"
 
@@ -1042,7 +1059,7 @@ def _run_playlist_job(job_id: str, playlist_url: str, output_format: str, includ
                     lyrics, source = _fetch_lyrics(track)
                     track.lyrics = lyrics
                     track.lyrics_source = source
-                    file_path = _download_audio(track, tmpdir, output_format=output_format)
+                    file_path = _download_audio_with_fallback(track, tmpdir, preferred_format=output_format)
                     _embed_metadata(file_path, track)
                     ext = os.path.splitext(file_path)[1].lower() or ".bin"
                     output_name = f"{idx:03d} - {_safe_filename(track)}{ext}"

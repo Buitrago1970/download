@@ -5,10 +5,11 @@ MVP simple: pega un link de Spotify, YouTube o un titulo y descarga un MP3 con m
 ## Que hace
 - Acepta input unificado: link publico de Spotify, link de YouTube o texto libre (titulo/cancion).
 - Resuelve metadata usando fuentes publicas (Spotify OpenGraph/oEmbed/JSON-LD y YouTube via yt-dlp).
-- Si llega Spotify o texto libre, busca la mejor coincidencia en YouTube.
+- Si llega Spotify o texto libre, busca en YouTube con ranking para priorizar audio oficial y evitar live/remix.
 - Si llega YouTube, descarga directo ese video.
-- Descarga audio en MP3 (mejor calidad disponible) y embebe caratula + metadata ID3.
-- Si llega playlist de Spotify, crea un job en background y entrega un ZIP con multiples MP3.
+- Permite formato de salida: `best` (sin recodificar), `m4a`, `opus` o `mp3`.
+- Embebe metadata/carátula en `mp3` y `m4a`.
+- Si llega playlist de Spotify, crea un job en background y entrega un ZIP con multiples archivos de audio.
 
 ## Metadata embebida (sin credenciales de Spotify)
 - Basica: titulo, artista, album, caratula.
@@ -30,7 +31,7 @@ SPOTIFY_CLIENT_SECRET=tu_client_secret
 Sin credenciales, el backend intenta resolver la playlist con extractor publico.
 
 ## Endpoints de playlist
-- `POST /api/playlist/start` con `{ \"input\": \"https://open.spotify.com/playlist/...\" }`
+- `POST /api/playlist/start` con `{ \"input\": \"https://open.spotify.com/playlist/...\", \"format\": \"best|m4a|opus|mp3\" }`
 - `GET /api/playlist/status/{job_id}`
 - `GET /api/playlist/file/{job_id}/{file_id}` para descargar una cancion ya lista
 - `GET /api/playlist/download/{job_id}`

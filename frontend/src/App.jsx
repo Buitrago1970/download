@@ -17,6 +17,7 @@ async function postJson(path, payload) {
 
 export default function App() {
   const [input, setInput] = useState("");
+  const [format, setFormat] = useState("best");
   const [meta, setMeta] = useState(null);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
@@ -72,7 +73,7 @@ export default function App() {
     setStatus("downloading");
     try {
       if (isSpotifyPlaylistInput(input, meta)) {
-        const started = await postJson("/api/playlist/start", { input });
+        const started = await postJson("/api/playlist/start", { input, format });
         const jobId = started.job_id;
         if (!jobId) throw new Error("No se pudo iniciar el job de playlist");
         setPlaylistJobId(jobId);
@@ -83,7 +84,7 @@ export default function App() {
       const res = await fetch(`/api/download`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input })
+        body: JSON.stringify({ input, format })
       });
       if (!res.ok) {
         throw new Error("Error en descarga");
@@ -123,6 +124,14 @@ export default function App() {
             <button onClick={handlePreview} disabled={!input || status === "loading"}>
               {status === "loading" ? "Buscando..." : "Buscar"}
             </button>
+          </div>
+          <div className="input-row" style={{ marginTop: 10 }}>
+            <select value={format} onChange={(e) => setFormat(e.target.value)}>
+              <option value="best">Mejor calidad (sin recodificar)</option>
+              <option value="m4a">M4A (AAC original)</option>
+              <option value="opus">Opus (alta calidad)</option>
+              <option value="mp3">MP3 (compatibilidad)</option>
+            </select>
           </div>
           {info && <div className="hint">{info}</div>}
           {error && <div className="error">{error}</div>}
@@ -192,7 +201,7 @@ export default function App() {
             </div>
           )}
           <div className="hint">
-            Soporta Spotify/YouTube/titulo. Para playlists de Spotify descarga un ZIP con todos los MP3.
+            Soporta Spotify/YouTube/titulo. Elige formato (best/m4a/opus/mp3) y en playlists puedes bajar una a una o todo en ZIP.
           </div>
         </div>
       </div>

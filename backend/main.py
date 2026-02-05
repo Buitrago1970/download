@@ -729,6 +729,10 @@ def _yt_dlp_opts(fmt: str, output_format: str) -> dict:
         opts["postprocessors"] = [
             {"key": "FFmpegExtractAudio", "preferredcodec": "opus", "preferredquality": "0"},
         ]
+    elif output_format == "m4a":
+        opts["postprocessors"] = [
+            {"key": "FFmpegExtractAudio", "preferredcodec": "m4a", "preferredquality": "0"},
+        ]
 
     cookiefile = _yt_cookiefile_path()
     if cookiefile:
@@ -762,17 +766,9 @@ def _find_generated_audio(tmpdir: str, fallback_id: Optional[str], output_format
 
 
 def _format_candidates(output_format: str) -> list[str]:
-    if output_format == "m4a":
-        return ["bestaudio[ext=m4a]/bestaudio"]
-    if output_format == "opus":
-        return ["bestaudio[acodec*=opus]/bestaudio[ext=webm]/bestaudio"]
-    if output_format == "mp3":
-        return [
-            "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
-            "bestaudio[ext=webm]/bestaudio/best",
-            "bestaudio/best",
-        ]
-    return ["bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best"]
+    if output_format == "best":
+        return ["bestaudio/best"]
+    return ["bestaudio/best"]
 
 
 def _download_audio(meta: MediaMeta, tmpdir: str, output_format: str = "best") -> str:
@@ -820,7 +816,11 @@ def _download_audio(meta: MediaMeta, tmpdir: str, output_format: str = "best") -
 
 
 def _download_audio_with_fallback(meta: MediaMeta, tmpdir: str, preferred_format: str) -> str:
-    order = [fmt for fmt in FALLBACK_FORMAT_ORDER if fmt in OUTPUT_FORMATS]
+    base = [fmt for fmt in FALLBACK_FORMAT_ORDER if fmt in OUTPUT_FORMATS]
+    order = []
+    if preferred_format in OUTPUT_FORMATS:
+        order.append(preferred_format)
+    order.extend([fmt for fmt in base if fmt not in order])
     last_error: Optional[HTTPException] = None
     for fmt in order:
         try:

@@ -72,3 +72,17 @@ docker run --rm -p 8000:8000 \
 ```
 
 También puedes usar `docker compose` agregando `environment` y `volumes` en `docker-compose.yml`.
+
+## Render: cookies por variable segura
+En Render es mas simple usar base64:
+
+1. Exporta cookies de YouTube en formato Netscape (`youtube_cookies.txt`).
+2. Convierte a base64:
+```bash
+base64 -i youtube_cookies.txt | tr -d '\n'
+```
+3. En Render agrega env var `YTDLP_COOKIES_B64` con ese valor.
+
+El backend crea `/tmp/ytdlp-cookies.txt` automaticamente al iniciar.
+
+Si YouTube responde "Sign in to confirm you're not a bot", el job de playlist ahora se corta de inmediato (no sigue reintentando todos los tracks).

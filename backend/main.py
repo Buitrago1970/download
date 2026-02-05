@@ -7,8 +7,10 @@ import threading
 import time
 import uuid
 import zipfile
+import base64
 from dataclasses import dataclass, field
 from typing import Optional
+from urllib.parse import quote
 
 import requests
 from bs4 import BeautifulSoup
@@ -16,7 +18,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
-from mutagen.id3 import APIC, COMM, ID3, TALB, TIT2, TLEN, TPE1, TPOS, TRCK, TDRC, TXXX
+from mutagen.id3 import APIC, COMM, ID3, TALB, TIT2, TLEN, TPE1, TPOS, TRCK, TDRC, TXXX, USLT
 from mutagen.mp4 import MP4, MP4Cover
 from mutagen.mp3 import MP3
 from yt_dlp import YoutubeDL
@@ -38,6 +40,7 @@ SPOTIFY_TOKEN_CACHE: dict[str, float | str | None] = {"access_token": None, "exp
 PLAYLIST_JOBS: dict[str, dict] = {}
 PLAYLIST_JOBS_LOCK = threading.Lock()
 OUTPUT_FORMATS = {"best", "mp3", "m4a", "opus"}
+_COOKIEFILE_CACHE_PATH: Optional[str] = None
 
 
 @dataclass
@@ -58,6 +61,8 @@ class MediaMeta:
     youtube_url: Optional[str] = None
     youtube_id: Optional[str] = None
     channel: Optional[str] = None
+    lyrics: Optional[str] = None
+    lyrics_source: Optional[str] = None
     extra_tags: dict[str, str] = field(default_factory=dict)
 
 
@@ -128,6 +133,79 @@ def _parse_artist_and_title(raw_title: str) -> tuple[Optional[str], str]:
     return None, raw_title.strip()
 
 
+def _guess_artist_and_title(meta: MediaMeta) -> tuple[Optional[str], Optional[str]]:
+    if meta.artist and meta.title:
+        return meta.artist, meta.title
+    if meta.title and " - " in meta.title:
+        parsed_artist, parsed_title = _parse_artist_and_title(meta.title)
+        if parsed_artist and parsed_title:
+            return parsed_artist, parsed_title
+    return meta.artist, meta.title
+
+
+def _normalize_lyrics(text: str) -> str:
+    cleaned = text.replace("\r\n", "\n").replace("\r", "\n")
+    cleaned = re.sub(r"[ \t]+\n", "\n", cleaned)
+    cleaned = re.sub(r"\n{3,}", "\n\n", cleaned)
+    return cleaned.strip()
+
+
+def _fetch_lyrics_from_url(url: str) -> Optional[str]:
+    try:
+        res = requests.get(url, timeout=12, headers={"User-Agent": "Mozilla/5.0"})
+    except requests.RequestException:
+        return None
+    if res.status_code != 200:
+        return None
+    try:
+        payload = res.json()
+    except ValueError:
+        return None
+    lyrics = (payload.get("lyrics") or "").strip()
+    if not lyrics:
+        return None
+    return _normalize_lyrics(lyrics)
+
+
+def _fetch_lyrics(meta: MediaMeta) -> tuple[Optional[str], Optional[str]]:
+    artist, title = _guess_artist_and_title(meta)
+    if not artist or not title:
+        return None, None
+
+    artist_q = quote(artist, safe="")
+    title_q = quote(title, safe="")
+    providers = [
+        ("lyrics.ovh", f"https://api.lyrics.ovh/v1/{artist_q}/{title_q}"),
+        ("lyrist", f"https://lyrist.vercel.app/api/{title_q}/{artist_q}"),
+    ]
+
+    for name, url in providers:
+        lyrics = _fetch_lyrics_from_url(url)
+        if lyrics:
+            return lyrics, name
+
+    return None, None
+
+
+def _build_lrc(meta: MediaMeta) -> Optional[str]:
+    if not meta.lyrics:
+        return None
+    lines = [line.strip() for line in meta.lyrics.split("\n")]
+    header = []
+    if meta.artist:
+        header.append(f"[ar:{meta.artist}]")
+    if meta.title:
+        header.append(f"[ti:{meta.title}]")
+    body = []
+    for line in lines:
+        if not line:
+            body.append("")
+        else:
+            body.append(f"[00:00.00]{line}")
+    content = "\n".join(header + body).strip()
+    return content or None
+
+
 def _spotify_id(url: str) -> Optional[str]:
     m = re.search(r"spotify\.com/(track|album|playlist|episode|show)/([a-zA-Z0-9]+)", url)
     if not m:
@@ -138,6 +216,41 @@ def _spotify_id(url: str) -> Optional[str]:
 def _spotify_kind(url: str) -> Optional[str]:
     m = re.search(r"spotify\.com/(track|album|playlist|episode|show)/", url)
     return m.group(1) if m else None
+
+
+def _yt_cookiefile_path() -> Optional[str]:
+    global _COOKIEFILE_CACHE_PATH
+    if _COOKIEFILE_CACHE_PATH and os.path.exists(_COOKIEFILE_CACHE_PATH):
+        return _COOKIEFILE_CACHE_PATH
+
+    cookie_path = os.getenv("YTDLP_COOKIES")
+    if cookie_path and os.path.exists(cookie_path):
+        _COOKIEFILE_CACHE_PATH = cookie_path
+        return cookie_path
+
+    cookie_b64 = os.getenv("YTDLP_COOKIES_B64")
+    if cookie_b64:
+        try:
+            data = base64.b64decode(cookie_b64).decode("utf-8")
+            path = "/tmp/ytdlp-cookies.txt"
+            with open(path, "w", encoding="utf-8") as f:
+                f.write(data)
+            _COOKIEFILE_CACHE_PATH = path
+            return path
+        except Exception:
+            return None
+
+    return None
+
+
+def _is_yt_bot_block_error(err: Exception) -> bool:
+    msg = str(err).lower()
+    markers = [
+        "sign in to confirm you're not a bot",
+        "use --cookies-from-browser or --cookies",
+        "confirm you’re not a bot",
+    ]
+    return any(token in msg for token in markers)
 
 
 def _best_spotify_cover_url(oembed: dict, og: dict) -> Optional[str]:
@@ -278,9 +391,9 @@ def _youtube_info(target: str, search: bool = False) -> dict:
         "skip_download": True,
     }
 
-    cookies = os.getenv("YTDLP_COOKIES")
-    if cookies and os.path.exists(cookies):
-        opts["cookiefile"] = cookies
+    cookiefile = _yt_cookiefile_path()
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
 
     with YoutubeDL(opts) as ydl:
         if search:
@@ -379,9 +492,9 @@ def _search_best_youtube_entry(query: str, meta: Optional[MediaMeta] = None, cou
         "skip_download": True,
     }
 
-    cookies = os.getenv("YTDLP_COOKIES")
-    if cookies and os.path.exists(cookies):
-        opts["cookiefile"] = cookies
+    cookiefile = _yt_cookiefile_path()
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
 
     with YoutubeDL(opts) as ydl:
         result = ydl.extract_info(f"ytsearch{count}:{query}", download=False)
@@ -535,6 +648,9 @@ def _embed_metadata_mp3(mp3_path: str, meta: MediaMeta):
     if meta.source in {"spotify", "youtube"}:
         audio.tags.add(COMM(encoding=3, desc="Source", text=meta.input_text))
 
+    if meta.lyrics:
+        audio.tags.add(USLT(encoding=3, lang="eng", desc="Lyrics", text=meta.lyrics))
+
     cover_bytes, cover_mime = _download_cover_bytes(meta)
     if cover_bytes:
         audio.tags.add(
@@ -569,6 +685,9 @@ def _embed_metadata_m4a(file_path: str, meta: MediaMeta):
     if source:
         audio["\xa9cmt"] = [str(source)]
 
+    if meta.lyrics:
+        audio["\xa9lyr"] = [meta.lyrics]
+
     cover_bytes, cover_mime = _download_cover_bytes(meta)
     if cover_bytes:
         cover_format = MP4Cover.FORMAT_JPEG
@@ -577,6 +696,15 @@ def _embed_metadata_m4a(file_path: str, meta: MediaMeta):
         audio["covr"] = [MP4Cover(cover_bytes, imageformat=cover_format)]
 
     audio.save()
+
+
+def _zip_audio_with_lrc(audio_path: str, audio_filename: str, lrc_content: str, lrc_filename: str) -> str:
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
+        zip_path = tmp.name
+    with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+        zf.write(audio_path, arcname=audio_filename)
+        zf.writestr(lrc_filename, lrc_content)
+    return zip_path
 
 
 def _yt_dlp_opts(fmt: str, output_format: str) -> dict:
@@ -601,9 +729,9 @@ def _yt_dlp_opts(fmt: str, output_format: str) -> dict:
             {"key": "FFmpegExtractAudio", "preferredcodec": "opus", "preferredquality": "0"},
         ]
 
-    cookies = os.getenv("YTDLP_COOKIES")
-    if cookies and os.path.exists(cookies):
-        opts["cookiefile"] = cookies
+    cookiefile = _yt_cookiefile_path()
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
 
     return opts
 
@@ -676,6 +804,11 @@ def _download_audio(meta: MediaMeta, tmpdir: str, output_format: str = "best") -
             if file_path:
                 return file_path
         except DownloadError as exc:
+            if _is_yt_bot_block_error(exc):
+                raise HTTPException(
+                    status_code=429,
+                    detail="YouTube blocked this server (bot check). Configure YTDLP_COOKIES or YTDLP_COOKIES_B64.",
+                )
             last_error = exc
             continue
 
@@ -687,6 +820,9 @@ def _download_audio(meta: MediaMeta, tmpdir: str, output_format: str = "best") -
 
 def download_from_input(value: str, output_format: str = "best") -> tuple[str, MediaMeta, str]:
     meta = resolve_input(value)
+    lyrics, source = _fetch_lyrics(meta)
+    meta.lyrics = lyrics
+    meta.lyrics_source = source
 
     with tempfile.TemporaryDirectory() as tmpdir:
         file_path = _download_audio(meta, tmpdir, output_format=output_format)
@@ -874,7 +1010,7 @@ def _append_job_file(job_id: str, file_entry: dict):
         PLAYLIST_JOBS[job_id]["files"].append(file_entry)
 
 
-def _run_playlist_job(job_id: str, playlist_url: str, output_format: str):
+def _run_playlist_job(job_id: str, playlist_url: str, output_format: str, include_lrc: bool):
     job_dir = tempfile.mkdtemp(prefix=f"downtify-{job_id[:8]}-")
     files_dir = os.path.join(job_dir, "files")
     os.makedirs(files_dir, exist_ok=True)
@@ -903,12 +1039,23 @@ def _run_playlist_job(job_id: str, playlist_url: str, output_format: str):
             _set_job(job_id, {"current": f"{idx}/{total}: {track.title}"})
             try:
                 with tempfile.TemporaryDirectory() as tmpdir:
+                    lyrics, source = _fetch_lyrics(track)
+                    track.lyrics = lyrics
+                    track.lyrics_source = source
                     file_path = _download_audio(track, tmpdir, output_format=output_format)
                     _embed_metadata(file_path, track)
                     ext = os.path.splitext(file_path)[1].lower() or ".bin"
                     output_name = f"{idx:03d} - {_safe_filename(track)}{ext}"
                     output_path = os.path.join(files_dir, output_name)
                     shutil.copy2(file_path, output_path)
+                    lrc_path = None
+                    if include_lrc and track.lyrics:
+                        lrc_content = _build_lrc(track)
+                        if lrc_content:
+                            lrc_name = f"{idx:03d} - {_safe_filename(track)}.lrc"
+                            lrc_path = os.path.join(files_dir, lrc_name)
+                            with open(lrc_path, "w", encoding="utf-8") as f:
+                                f.write(lrc_content)
                 _append_job_file(
                     job_id,
                     {
@@ -918,16 +1065,39 @@ def _run_playlist_job(job_id: str, playlist_url: str, output_format: str):
                         "artist": track.artist,
                         "filename": output_name,
                         "path": output_path,
+                        "lrc_path": lrc_path,
+                        "lyrics_found": bool(track.lyrics),
+                        "lyrics_source": track.lyrics_source,
                     },
                 )
                 success_count += 1
                 _set_job(job_id, {"done": success_count})
+            except HTTPException as exc:
+                if exc.status_code == 429:
+                    _set_job(
+                        job_id,
+                        {
+                            "status": "failed",
+                            "error": str(exc.detail),
+                            "current": None,
+                            "failed": failed_count + 1,
+                            "done": success_count,
+                        },
+                    )
+                    return
+                failed_count += 1
+                _set_job(job_id, {"failed": failed_count, "done": success_count})
+                continue
             except Exception:
                 failed_count += 1
                 _set_job(job_id, {"failed": failed_count, "done": success_count})
                 continue
 
-        created_files = [name for name in os.listdir(files_dir) if name.lower().endswith(".mp3")]
+        created_files = [
+            name
+            for name in os.listdir(files_dir)
+            if name.lower().endswith((".mp3", ".m4a", ".opus", ".webm", ".lrc"))
+        ]
         if not created_files:
             _set_job(job_id, {"status": "failed", "error": "No tracks were downloaded"})
             return
@@ -959,6 +1129,7 @@ async def preview(payload: dict):
         raise HTTPException(status_code=400, detail="Missing input")
 
     meta = resolve_input(value)
+    lyrics, source = _fetch_lyrics(meta)
     return JSONResponse(
         {
             "source": meta.source,
@@ -972,6 +1143,8 @@ async def preview(payload: dict):
             "release_date": meta.release_date,
             "channel": meta.channel,
             "youtube_url": meta.youtube_url,
+            "lyrics_found": bool(lyrics),
+            "lyrics_source": source,
         }
     )
 
@@ -980,6 +1153,7 @@ async def preview(payload: dict):
 async def download(payload: dict, background_tasks: BackgroundTasks):
     value = payload.get("input") or payload.get("url")
     output_format = str(payload.get("format") or "best").lower()
+    include_lrc = bool(payload.get("include_lrc") or payload.get("with_lrc"))
     if not value:
         raise HTTPException(status_code=400, detail="Missing input")
     if output_format not in OUTPUT_FORMATS:
@@ -990,6 +1164,16 @@ async def download(payload: dict, background_tasks: BackgroundTasks):
 
     file_path, meta, ext = download_from_input(value, output_format=output_format)
     filename = _safe_filename(meta) + ext
+    if include_lrc and meta.lyrics:
+        lrc_content = _build_lrc(meta)
+        if lrc_content:
+            lrc_filename = _safe_filename(meta) + ".lrc"
+            zip_path = _zip_audio_with_lrc(file_path, filename, lrc_content, lrc_filename)
+            background_tasks.add_task(lambda p: os.remove(p), file_path)
+            background_tasks.add_task(lambda p: os.remove(p), zip_path)
+            zip_name = _safe_filename(meta) + ".zip"
+            return FileResponse(zip_path, filename=zip_name, media_type="application/zip")
+
     background_tasks.add_task(lambda p: os.remove(p), file_path)
     media_type = "audio/mpeg"
     if ext == ".m4a":
@@ -1003,6 +1187,7 @@ async def download(payload: dict, background_tasks: BackgroundTasks):
 async def playlist_start(payload: dict):
     value = payload.get("input") or payload.get("url")
     output_format = str(payload.get("format") or "best").lower()
+    include_lrc = bool(payload.get("include_lrc") or payload.get("with_lrc"))
     if not value:
         raise HTTPException(status_code=400, detail="Missing input")
     if output_format not in OUTPUT_FORMATS:
@@ -1027,10 +1212,15 @@ async def playlist_start(payload: dict):
             "cover_url": None,
             "source_mode": None,
             "output_format": output_format,
+            "include_lrc": include_lrc,
             "created_at": int(time.time()),
         }
 
-    thread = threading.Thread(target=_run_playlist_job, args=(job_id, str(value), output_format), daemon=True)
+    thread = threading.Thread(
+        target=_run_playlist_job,
+        args=(job_id, str(value), output_format, include_lrc),
+        daemon=True,
+    )
     thread.start()
 
     return JSONResponse({"job_id": job_id, "status": "queued"})
@@ -1056,6 +1246,7 @@ async def playlist_status(job_id: str):
             "cover_url": job["cover_url"],
             "source_mode": job["source_mode"],
             "output_format": job.get("output_format"),
+            "include_lrc": job.get("include_lrc"),
             "files": [
                 {
                     "id": item["id"],
@@ -1063,6 +1254,8 @@ async def playlist_status(job_id: str):
                     "title": item["title"],
                     "artist": item["artist"],
                     "filename": item["filename"],
+                    "lyrics_found": item.get("lyrics_found"),
+                    "lyrics_source": item.get("lyrics_source"),
                 }
                 for item in (job.get("files") or [])
             ],
@@ -1072,7 +1265,7 @@ async def playlist_status(job_id: str):
 
 
 @app.get("/api/playlist/file/{job_id}/{file_id}")
-async def playlist_file_download(job_id: str, file_id: str):
+async def playlist_file_download(job_id: str, file_id: str, background_tasks: BackgroundTasks, include_lrc: bool = False):
     with PLAYLIST_JOBS_LOCK:
         job = PLAYLIST_JOBS.get(job_id)
     if not job:
@@ -1091,6 +1284,18 @@ async def playlist_file_download(job_id: str, file_id: str):
         raise HTTPException(status_code=410, detail="Track file is no longer available")
 
     ext = os.path.splitext(file_entry["filename"])[1].lower()
+    if include_lrc and file_entry.get("lrc_path"):
+        lrc_path = str(file_entry.get("lrc_path") or "")
+        if os.path.exists(lrc_path):
+            with tempfile.NamedTemporaryFile(delete=False, suffix=".zip") as tmp:
+                zip_path = tmp.name
+            with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zf:
+                zf.write(file_path, arcname=file_entry["filename"])
+                zf.write(lrc_path, arcname=os.path.basename(lrc_path))
+            zip_name = os.path.splitext(file_entry["filename"])[0] + ".zip"
+            background_tasks.add_task(lambda p: os.remove(p), zip_path)
+            return FileResponse(zip_path, filename=zip_name, media_type="application/zip")
+
     media_type = "audio/mpeg"
     if ext == ".m4a":
         media_type = "audio/mp4"

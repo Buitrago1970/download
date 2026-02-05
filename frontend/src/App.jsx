@@ -22,6 +22,7 @@ export default function App() {
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
+  const [includeLrc, setIncludeLrc] = useState(false);
   const [playlistJobId, setPlaylistJobId] = useState("");
   const [playlistJob, setPlaylistJob] = useState(null);
 
@@ -51,7 +52,7 @@ export default function App() {
     return () => clearInterval(timer);
   }, [playlistJobId]);
 
-  const handlePreview = async () => {
+  const handleProcess = async () => {
     setError("");
     setInfo("");
     setPlaylistJobId("");
@@ -60,20 +61,9 @@ export default function App() {
     try {
       const data = await postJson("/api/preview", { input });
       setMeta(data);
-      setStatus("ready");
-    } catch (err) {
-      setError("No pude resolver la entrada. Usa link de Spotify, YouTube o un titulo.");
-      setStatus("idle");
-    }
-  };
-
-  const handleDownload = async () => {
-    setError("");
-    setInfo("");
-    setStatus("downloading");
-    try {
-      if (isSpotifyPlaylistInput(input, meta)) {
-        const started = await postJson("/api/playlist/start", { input, format });
+      setStatus("downloading");
+      if (isSpotifyPlaylistInput(input, data)) {
+        const started = await postJson("/api/playlist/start", { input, format, include_lrc: includeLrc });
         const jobId = started.job_id;
         if (!jobId) throw new Error("No se pudo iniciar el job de playlist");
         setPlaylistJobId(jobId);
@@ -84,7 +74,7 @@ export default function App() {
       const res = await fetch(`/api/download`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input, format })
+        body: JSON.stringify({ input, format, include_lrc: includeLrc })
       });
       if (!res.ok) {
         throw new Error("Error en descarga");
@@ -99,8 +89,8 @@ export default function App() {
       link.remove();
       setStatus("done");
     } catch (err) {
-      setError("No pude descargar. Intenta de nuevo.");
-      setStatus("ready");
+      setError("No pude procesar la entrada o descargar. Intenta de nuevo.");
+      setStatus("idle");
     }
   };
 
@@ -121,17 +111,27 @@ export default function App() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
             />
-            <button onClick={handlePreview} disabled={!input || status === "loading"}>
-              {status === "loading" ? "Buscando..." : "Buscar"}
+            <button onClick={handleProcess} disabled={!input || status === "loading" || status === "downloading"}>
+              {status === "loading" || status === "downloading" ? "Procesando..." : "Procesar y descargar"}
             </button>
           </div>
           <div className="input-row" style={{ marginTop: 10 }}>
-            <select value={format} onChange={(e) => setFormat(e.target.value)}>
+            <select className="format-select" value={format} onChange={(e) => setFormat(e.target.value)}>
               <option value="best">Mejor calidad (sin recodificar)</option>
               <option value="m4a">M4A (AAC original)</option>
               <option value="opus">Opus (alta calidad)</option>
               <option value="mp3">MP3 (compatibilidad)</option>
             </select>
+          </div>
+          <div className="input-row" style={{ marginTop: 10 }}>
+            <label className="checkbox-row">
+              <input
+                type="checkbox"
+                checked={includeLrc}
+                onChange={(e) => setIncludeLrc(e.target.checked)}
+              />
+              Incluir letras (.lrc) si están disponibles
+            </label>
           </div>
           {info && <div className="hint">{info}</div>}
           {error && <div className="error">{error}</div>}
@@ -146,46 +146,47 @@ export default function App() {
                 {meta.album && <div className="album">{meta.album}</div>}
                 {meta.channel && <div className="album">{meta.channel}</div>}
                 <div className="type">{meta.media_type || meta.source || "media"}</div>
+                {"lyrics_found" in meta && (
+                  <div className="album">
+                    Letras: {meta.lyrics_found ? `encontradas${meta.lyrics_source ? ` (${meta.lyrics_source})` : ""}` : "no encontradas"}
+                  </div>
+                )}
               </div>
             </div>
           )}
-          {meta && (
-            <button className="download" onClick={handleDownload} disabled={status === "downloading"}>
-              {status === "downloading" ? "Descargando..." : isSpotifyPlaylistInput(input, meta) ? "Descargar Playlist (ZIP)" : "Descargar MP3"}
-            </button>
-          )}
           {playlistJob && (
-            <div className="preview">
-              <div className="meta" style={{ width: "100%" }}>
+            <div className="preview playlist-panel">
+              <div className="meta playlist-meta">
                 <div className="title">{playlistJob.playlist_title || "Playlist"}</div>
                 <div className="album">
                   {playlistJob.done || 0}/{playlistJob.total || 0} completadas
                 </div>
                 {!!playlistJob.failed && (
-                  <div className="error" style={{ marginTop: 8 }}>
+                  <div className="error mini-error">
                     Fallidas: {playlistJob.failed}
                   </div>
                 )}
-                <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
+                <div className="track-list">
                   {(playlistJob.files || []).map((file) => (
                     <button
+                      className="track-download"
                       key={file.id}
                       onClick={async () => {
                         try {
-                          await downloadPlaylistTrack(playlistJob.id, file.id);
+                          await downloadPlaylistTrack(playlistJob.id, file.id, includeLrc);
                         } catch (_) {
                           setError("No pude descargar esa cancion.");
                         }
                       }}
                     >
                       Descargar #{file.index} {file.artist ? `${file.artist} - ` : ""}{file.title}
+                      {file.lyrics_found ? " (letras)" : ""}
                     </button>
                   ))}
                 </div>
                 {playlistJob.ready && (
                   <button
                     className="download"
-                    style={{ marginTop: 10 }}
                     onClick={async () => {
                       try {
                         await downloadPlaylistZip(playlistJob.id);
@@ -220,8 +221,9 @@ function isSpotifyPlaylistInput(input, meta) {
   return meta?.source === "spotify" && meta?.media_type === "playlist";
 }
 
-async function downloadPlaylistTrack(jobId, fileId) {
-  const res = await fetch(`/api/playlist/file/${jobId}/${fileId}`);
+async function downloadPlaylistTrack(jobId, fileId, includeLrc) {
+  const qs = includeLrc ? "?include_lrc=1" : "";
+  const res = await fetch(`/api/playlist/file/${jobId}/${fileId}${qs}`);
   if (!res.ok) throw new Error("No se pudo descargar el track");
   const blob = await res.blob();
   const filename = getFileName(res.headers.get("Content-Disposition")) || `track-${fileId}.mp3`;

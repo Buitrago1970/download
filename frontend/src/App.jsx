@@ -26,6 +26,7 @@ export default function App() {
   const [playlistJobId, setPlaylistJobId] = useState("");
   const [playlistJob, setPlaylistJob] = useState(null);
   const [lastPayload, setLastPayload] = useState(null);
+  const [canDownload, setCanDownload] = useState(false);
 
   useEffect(() => {
     if (!playlistJobId) return undefined;
@@ -53,18 +54,43 @@ export default function App() {
     return () => clearInterval(timer);
   }, [playlistJobId]);
 
-  const handleProcess = async () => {
+  useEffect(() => {
+    if (!input || !input.trim()) {
+      setMeta(null);
+      setCanDownload(false);
+      setError("");
+      return undefined;
+    }
+
+    setError("");
+    setInfo("");
+    setCanDownload(false);
+    const timer = setTimeout(async () => {
+      try {
+        const data = await postJson("/api/preview", { input });
+        setMeta(data);
+        setCanDownload(true);
+      } catch (err) {
+        setMeta(null);
+        setCanDownload(false);
+        setError("No pude encontrar esa entrada.");
+      }
+    }, 450);
+
+    return () => clearTimeout(timer);
+  }, [input]);
+
+  const handleDownload = async () => {
     setError("");
     setInfo("");
     setPlaylistJobId("");
     setPlaylistJob(null);
-    setStatus("loading");
+    setStatus("downloading");
     setLastPayload({ input, format, includeLrc });
     try {
-      const data = await postJson("/api/preview", { input });
-      setMeta(data);
-      setStatus("downloading");
-      if (isSpotifyPlaylistInput(input, data)) {
+      const preview = meta || (await postJson("/api/preview", { input }));
+      if (preview) setMeta(preview);
+      if (isSpotifyPlaylistInput(input, preview)) {
         const started = await postJson("/api/playlist/start", { input, format, include_lrc: includeLrc });
         const jobId = started.job_id;
         if (!jobId) throw new Error("No se pudo iniciar el job de playlist");
@@ -102,7 +128,7 @@ export default function App() {
     setInput(lastPayload.input || "");
     // formato fijo
     setIncludeLrc(Boolean(lastPayload.includeLrc));
-    await handleProcess();
+    await handleDownload();
   };
 
   return (
@@ -122,9 +148,11 @@ export default function App() {
               value={input}
               onChange={(e) => setInput(e.target.value)}
             />
-            <button onClick={handleProcess} disabled={!input || status === "loading" || status === "downloading"}>
-              {status === "loading" || status === "downloading" ? "Procesando..." : "Procesar y descargar"}
-            </button>
+            {canDownload && (
+              <button onClick={handleDownload} disabled={status === "downloading"}>
+                {status === "downloading" ? "Descargando..." : "Descargar"}
+              </button>
+            )}
           </div>
           <div className="input-row" style={{ marginTop: 10 }}>
             <div className="format-note">Formato fijo: MP3 (compatibilidad máxima)</div>

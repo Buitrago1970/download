@@ -110,6 +110,17 @@ label {
   gap: 10px;
 }
 
+.format-note {
+  width: 100%;
+  padding: 10px 12px;
+  border: 1px solid #20252c;
+  border-radius: 4px;
+  background: #0f1216;
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.8rem;
+  color: var(--muted);
+}
+
 input,
 select {
   width: 100%;

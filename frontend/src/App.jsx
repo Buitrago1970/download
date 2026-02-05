@@ -17,7 +17,7 @@ async function postJson(path, payload) {
 
 export default function App() {
   const [input, setInput] = useState("");
-  const [format, setFormat] = useState("best");
+  const [format] = useState("mp3");
   const [meta, setMeta] = useState(null);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
@@ -100,7 +100,7 @@ export default function App() {
   const handleRetry = async () => {
     if (!lastPayload) return;
     setInput(lastPayload.input || "");
-    setFormat(lastPayload.format || "best");
+    // formato fijo
     setIncludeLrc(Boolean(lastPayload.includeLrc));
     await handleProcess();
   };
@@ -127,12 +127,7 @@ export default function App() {
             </button>
           </div>
           <div className="input-row" style={{ marginTop: 10 }}>
-            <select className="format-select" value={format} onChange={(e) => setFormat(e.target.value)}>
-              <option value="best">Mejor calidad (sin recodificar)</option>
-              <option value="m4a">M4A (AAC original)</option>
-              <option value="opus">Opus (alta calidad)</option>
-              <option value="mp3">MP3 (compatibilidad)</option>
-            </select>
+            <div className="format-note">Formato fijo: MP3 (compatibilidad máxima)</div>
           </div>
           <div className="input-row" style={{ marginTop: 10 }}>
             <label className="checkbox-row">
@@ -222,7 +217,7 @@ export default function App() {
             </div>
           )}
           <div className="hint">
-            Soporta Spotify/YouTube/titulo. Elige formato (best/m4a/opus/mp3) y en playlists puedes bajar una a una o todo en ZIP.
+            Soporta Spotify/YouTube/titulo. Descarga en MP3 y en playlists puedes bajar una a una o todo en ZIP.
           </div>
         </div>
       </div>

@@ -710,7 +710,7 @@ def _zip_audio_with_lrc(audio_path: str, audio_filename: str, lrc_content: str, 
 
 def _yt_dlp_opts(fmt: str, output_format: str) -> dict:
     opts = {
-        "format": fmt,
+        "format": "bestaudio/best",
         "outtmpl": "%(id)s.%(ext)s",
         "quiet": True,
         "no_warnings": True,
@@ -766,8 +766,6 @@ def _find_generated_audio(tmpdir: str, fallback_id: Optional[str], output_format
 
 
 def _format_candidates(output_format: str) -> list[str]:
-    if output_format == "best":
-        return ["bestaudio/best"]
     return ["bestaudio/best"]
 
 

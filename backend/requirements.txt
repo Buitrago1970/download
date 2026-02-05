@@ -1,0 +1,6 @@
+fastapi==0.115.6
+uvicorn[standard]==0.30.6
+requests==2.32.3
+beautifulsoup4==4.12.3
+yt-dlp>=2025.01.15
+mutagen==1.47.0

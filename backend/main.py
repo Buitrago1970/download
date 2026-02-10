@@ -677,9 +677,14 @@ def _yt_dlp_opts(fmt: Optional[str], output_format: str) -> dict:
         "geo_bypass": True,
         "nocheckcertificate": True,
         "hls_prefer_native": True,
+        # Broaden available manifests for problematic videos.
+        "extractor_args": {"youtube": {"player_client": ["android", "ios", "web"]}},
     }
     if fmt:
         opts["format"] = fmt
+    else:
+        # Avoid yt-dlp default bestvideo+bestaudio selection for audio workflows.
+        opts["format"] = "bestaudio/best"
     if output_format == "mp3":
         opts["postprocessors"] = [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "0"},
@@ -779,8 +784,20 @@ def _extract_youtube_entry_for_retry(target: str) -> Optional[dict]:
         first = entries[0]
         if not isinstance(first, dict):
             return None
-        return first
-    return info if isinstance(info, dict) else None
+        info = first
+
+    if not isinstance(info, dict):
+        return None
+    if info.get("formats"):
+        return info
+
+    # If search/direct extraction returned partial info, request full video metadata.
+    url = info.get("webpage_url") or info.get("url")
+    if not url:
+        return info
+    with YoutubeDL(opts) as ydl:
+        full = ydl.extract_info(str(url), download=False)
+    return full if isinstance(full, dict) else info
 
 
 def _pick_format_id_for_entry(entry: dict, output_format: str) -> Optional[str]:
@@ -845,6 +862,17 @@ def _smart_retry_with_available_format(
         source_id = str(entry.get("id") or "") or None
         format_id = _pick_format_id_for_entry(entry, output_format=output_format)
         if not format_id:
+            # Fallback when format listing is limited/unreliable.
+            for fallback_fmt in ["bestaudio/best", "best", None]:
+                ydl_opts = _yt_dlp_opts(fallback_fmt, output_format=output_format)
+                ydl_opts["outtmpl"] = os.path.join(tmpdir, "%(id)s.%(ext)s")
+                with YoutubeDL(ydl_opts) as ydl:
+                    downloaded = ydl.extract_info(str(retry_target), download=True)
+                    if isinstance(downloaded, dict):
+                        source_id = downloaded.get("id") or source_id
+                file_path = _find_generated_audio(tmpdir, source_id, output_format=output_format)
+                if file_path:
+                    return file_path, fallback_fmt or "auto"
             return None, None
 
         ydl_opts = _yt_dlp_opts(format_id, output_format=output_format)

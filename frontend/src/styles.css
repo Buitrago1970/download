@@ -142,8 +142,46 @@ button:disabled {
   color: #4c4c56;
 }
 
+.playlist-list {
+  margin-top: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.playlist-track {
+  width: 100%;
+  text-align: left;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  transition: opacity 0.25s ease, transform 0.25s ease, background-color 0.25s ease;
+}
+
+.playlist-track.pending {
+  opacity: 0.4;
+  transform: scale(0.995);
+  background: #494957;
+}
+
+.playlist-track.ready {
+  opacity: 1;
+  background: #1a6d50;
+}
+
+.track-state {
+  font-size: 0.78rem;
+  opacity: 0.9;
+  white-space: nowrap;
+}
+
 @media (max-width: 640px) {
   .input-row {
     flex-direction: column;
+  }
+
+  .playlist-track {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

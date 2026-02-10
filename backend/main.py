@@ -38,6 +38,7 @@ SPOTIFY_TOKEN_CACHE: dict[str, float | str | None] = {"access_token": None, "exp
 PLAYLIST_JOBS: dict[str, dict] = {}
 PLAYLIST_JOBS_LOCK = threading.Lock()
 OUTPUT_FORMATS = {"best", "mp3", "m4a", "opus"}
+DEFAULT_OUTPUT_FORMAT = "mp3"
 
 
 @dataclass
@@ -586,11 +587,14 @@ def _yt_dlp_opts(fmt: str, output_format: str) -> dict:
         "quiet": True,
         "no_warnings": True,
         "noplaylist": True,
-        "retries": 3,
-        "fragment_retries": 3,
-        "extractor_retries": 3,
+        "retries": 5,
+        "fragment_retries": 5,
+        "extractor_retries": 5,
         "socket_timeout": 15,
         "http_chunk_size": 1024 * 1024,
+        "geo_bypass": True,
+        "nocheckcertificate": True,
+        "hls_prefer_native": True,
     }
     if output_format == "mp3":
         opts["postprocessors"] = [
@@ -656,28 +660,33 @@ def _download_audio(meta: MediaMeta, tmpdir: str, output_format: str = "best") -
     formats = _format_candidates(output_format)
 
     last_error = None
-    source_id = meta.youtube_id
-    target = meta.youtube_url if meta.source == "youtube" and meta.youtube_url else f"ytsearch1:{query}"
+    search_target = f"ytsearch1:{query}"
+    targets: list[str] = []
+    if meta.source == "youtube" and meta.youtube_url:
+        targets.append(meta.youtube_url)
+    targets.append(search_target)
 
-    for fmt in formats:
-        ydl_opts = _yt_dlp_opts(fmt, output_format=output_format)
-        ydl_opts["outtmpl"] = os.path.join(tmpdir, "%(id)s.%(ext)s")
-        try:
-            with YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(target, download=True)
-                if target.startswith("ytsearch1:"):
-                    if not info or "entries" not in info or not info["entries"]:
-                        raise HTTPException(status_code=404, detail="No YouTube match found")
-                    entry = info["entries"][0]
-                    source_id = entry.get("id")
-                else:
-                    source_id = info.get("id")
-            file_path = _find_generated_audio(tmpdir, source_id, output_format=output_format)
-            if file_path:
-                return file_path
-        except DownloadError as exc:
-            last_error = exc
-            continue
+    for target in targets:
+        source_id = meta.youtube_id
+        for fmt in formats:
+            ydl_opts = _yt_dlp_opts(fmt, output_format=output_format)
+            ydl_opts["outtmpl"] = os.path.join(tmpdir, "%(id)s.%(ext)s")
+            try:
+                with YoutubeDL(ydl_opts) as ydl:
+                    info = ydl.extract_info(target, download=True)
+                    if target.startswith("ytsearch1:"):
+                        if not info or "entries" not in info or not info["entries"]:
+                            raise HTTPException(status_code=404, detail="No YouTube match found")
+                        entry = info["entries"][0]
+                        source_id = entry.get("id")
+                    else:
+                        source_id = info.get("id")
+                file_path = _find_generated_audio(tmpdir, source_id, output_format=output_format)
+                if file_path:
+                    return file_path
+            except DownloadError as exc:
+                last_error = exc
+                continue
 
     detail = "YouTube download failed"
     if last_error:
@@ -893,6 +902,15 @@ def _run_playlist_job(job_id: str, playlist_url: str, output_format: str):
                 "total": total,
                 "done": 0,
                 "failed": 0,
+                "tracks": [
+                    {
+                        "id": str(i),
+                        "index": i,
+                        "title": track.title,
+                        "artist": track.artist,
+                    }
+                    for i, track in enumerate(tracks, start=1)
+                ],
             },
         )
 
@@ -927,7 +945,7 @@ def _run_playlist_job(job_id: str, playlist_url: str, output_format: str):
                 _set_job(job_id, {"failed": failed_count, "done": success_count})
                 continue
 
-        created_files = [name for name in os.listdir(files_dir) if name.lower().endswith(".mp3")]
+        created_files = [name for name in os.listdir(files_dir) if name.lower().endswith((".mp3", ".m4a", ".opus", ".webm"))]
         if not created_files:
             _set_job(job_id, {"status": "failed", "error": "No tracks were downloaded"})
             return
@@ -979,11 +997,9 @@ async def preview(payload: dict):
 @app.post("/api/download")
 async def download(payload: dict, background_tasks: BackgroundTasks):
     value = payload.get("input") or payload.get("url")
-    output_format = str(payload.get("format") or "best").lower()
+    output_format = DEFAULT_OUTPUT_FORMAT
     if not value:
         raise HTTPException(status_code=400, detail="Missing input")
-    if output_format not in OUTPUT_FORMATS:
-        raise HTTPException(status_code=400, detail=f"Unsupported format: {output_format}")
 
     if _is_spotify_playlist_url(str(value)):
         raise HTTPException(status_code=400, detail="Use /api/playlist/start for Spotify playlists")
@@ -1002,11 +1018,9 @@ async def download(payload: dict, background_tasks: BackgroundTasks):
 @app.post("/api/playlist/start")
 async def playlist_start(payload: dict):
     value = payload.get("input") or payload.get("url")
-    output_format = str(payload.get("format") or "best").lower()
+    output_format = DEFAULT_OUTPUT_FORMAT
     if not value:
         raise HTTPException(status_code=400, detail="Missing input")
-    if output_format not in OUTPUT_FORMATS:
-        raise HTTPException(status_code=400, detail=f"Unsupported format: {output_format}")
     if not _is_spotify_playlist_url(str(value)):
         raise HTTPException(status_code=400, detail="Input must be a Spotify playlist URL")
 
@@ -1023,6 +1037,7 @@ async def playlist_start(payload: dict):
             "error": None,
             "zip_path": None,
             "files": [],
+            "tracks": [],
             "playlist_title": None,
             "cover_url": None,
             "source_mode": None,
@@ -1065,6 +1080,15 @@ async def playlist_status(job_id: str):
                     "filename": item["filename"],
                 }
                 for item in (job.get("files") or [])
+            ],
+            "tracks": [
+                {
+                    "id": item["id"],
+                    "index": item["index"],
+                    "title": item["title"],
+                    "artist": item["artist"],
+                }
+                for item in (job.get("tracks") or [])
             ],
             "ready": bool(job["zip_path"] and job["status"] == "done"),
         }

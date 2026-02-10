@@ -17,13 +17,13 @@ async function postJson(path, payload) {
 
 export default function App() {
   const [input, setInput] = useState("");
-  const [format, setFormat] = useState("best");
   const [meta, setMeta] = useState(null);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
   const [playlistJobId, setPlaylistJobId] = useState("");
   const [playlistJob, setPlaylistJob] = useState(null);
+  const readyTrackIds = new Set((playlistJob?.files || []).map((file) => String(file.id)));
 
   useEffect(() => {
     if (!playlistJobId) return undefined;
@@ -73,7 +73,7 @@ export default function App() {
     setStatus("downloading");
     try {
       if (isSpotifyPlaylistInput(input, meta)) {
-        const started = await postJson("/api/playlist/start", { input, format });
+        const started = await postJson("/api/playlist/start", { input });
         const jobId = started.job_id;
         if (!jobId) throw new Error("No se pudo iniciar el job de playlist");
         setPlaylistJobId(jobId);
@@ -84,7 +84,7 @@ export default function App() {
       const res = await fetch(`/api/download`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input, format })
+        body: JSON.stringify({ input })
       });
       if (!res.ok) {
         throw new Error("Error en descarga");
@@ -125,14 +125,6 @@ export default function App() {
               {status === "loading" ? "Buscando..." : "Buscar"}
             </button>
           </div>
-          <div className="input-row" style={{ marginTop: 10 }}>
-            <select value={format} onChange={(e) => setFormat(e.target.value)}>
-              <option value="best">Mejor calidad (sin recodificar)</option>
-              <option value="m4a">M4A (AAC original)</option>
-              <option value="opus">Opus (alta calidad)</option>
-              <option value="mp3">MP3 (compatibilidad)</option>
-            </select>
-          </div>
           {info && <div className="hint">{info}</div>}
           {error && <div className="error">{error}</div>}
           {meta && (
@@ -166,21 +158,28 @@ export default function App() {
                     Fallidas: {playlistJob.failed}
                   </div>
                 )}
-                <div style={{ marginTop: 10, display: "grid", gap: 8 }}>
-                  {(playlistJob.files || []).map((file) => (
-                    <button
-                      key={file.id}
-                      onClick={async () => {
-                        try {
-                          await downloadPlaylistTrack(playlistJob.id, file.id);
-                        } catch (_) {
-                          setError("No pude descargar esa cancion.");
-                        }
-                      }}
-                    >
-                      Descargar #{file.index} {file.artist ? `${file.artist} - ` : ""}{file.title}
-                    </button>
-                  ))}
+                <div className="playlist-list">
+                  {(playlistJob.tracks || []).map((track) => {
+                    const isReady = readyTrackIds.has(String(track.id));
+                    return (
+                      <button
+                        key={track.id}
+                        className={`playlist-track ${isReady ? "ready" : "pending"}`}
+                        disabled={!isReady}
+                        onClick={async () => {
+                          try {
+                            await downloadPlaylistTrack(playlistJob.id, track.id);
+                          } catch (_) {
+                            setError("No pude descargar esa cancion.");
+                          }
+                        }}
+                      >
+                        #{track.index} {track.artist ? `${track.artist} - ` : ""}{track.title}
+                        {!isReady && <span className="track-state">Procesando...</span>}
+                        {isReady && <span className="track-state">Lista para descargar</span>}
+                      </button>
+                    );
+                  })}
                 </div>
                 {playlistJob.ready && (
                   <button
@@ -201,7 +200,7 @@ export default function App() {
             </div>
           )}
           <div className="hint">
-            Soporta Spotify/YouTube/titulo. Elige formato (best/m4a/opus/mp3) y en playlists puedes bajar una a una o todo en ZIP.
+            Soporta Spotify/YouTube/titulo. Descarga directa en MP3 y en playlists puedes bajar una a una o todo en ZIP.
           </div>
         </div>
       </div>

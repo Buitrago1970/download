@@ -70,3 +70,5 @@ docker run --rm -p 8000:8000 \
   -v /ruta/a/youtube.txt:/cookies/youtube.txt:ro \
   alacrandw-app:latest
 ```
+
+Tambien puedes pasar cookies en base64 con `YTDLP_COOKIES_B64` (contenido del archivo Netscape cookie file codificado en base64).

@@ -1,3 +1,5 @@
+import base64
+import binascii
 import json
 import os
 import re
@@ -40,6 +42,8 @@ PLAYLIST_JOBS: dict[str, dict] = {}
 PLAYLIST_JOBS_LOCK = threading.Lock()
 OUTPUT_FORMATS = {"best", "mp3", "m4a", "opus"}
 DEFAULT_OUTPUT_FORMAT = "mp3"
+YTDLP_COOKIEFILE_CACHE: dict[str, Optional[str]] = {"path": None}
+YTDLP_COOKIEFILE_LOCK = threading.Lock()
 
 
 @dataclass
@@ -73,6 +77,47 @@ def _is_youtube_url(value: str) -> bool:
 
 def _is_spotify_playlist_url(value: str) -> bool:
     return bool(re.search(r"spotify\.com/playlist/", value, re.IGNORECASE))
+
+
+def _yt_dlp_cookiefile() -> Optional[str]:
+    direct = os.getenv("YTDLP_COOKIES", "").strip()
+    if direct and os.path.exists(direct):
+        return direct
+
+    encoded = os.getenv("YTDLP_COOKIES_B64", "").strip()
+    if not encoded:
+        return None
+
+    with YTDLP_COOKIEFILE_LOCK:
+        cached = YTDLP_COOKIEFILE_CACHE.get("path")
+        if cached and os.path.exists(cached):
+            return cached
+
+        # Some deploy panels append punctuation or whitespace around env values.
+        clean = encoded.strip().strip("%").replace("\n", "").replace("\r", "")
+        if not clean:
+            return None
+
+        try:
+            raw = base64.b64decode(clean, validate=False)
+        except (binascii.Error, ValueError):
+            return None
+
+        try:
+            text = raw.decode("utf-8")
+        except UnicodeDecodeError:
+            return None
+
+        if "# Netscape HTTP Cookie File" not in text:
+            return None
+
+        fd, path = tempfile.mkstemp(prefix="yt-cookies-", suffix=".txt")
+        os.close(fd)
+        with open(path, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(path, 0o600)
+        YTDLP_COOKIEFILE_CACHE["path"] = path
+        return path
 
 
 def _fetch_soup(url: str) -> Optional[BeautifulSoup]:
@@ -313,9 +358,9 @@ def _youtube_info(target: str, search: bool = False) -> dict:
         "skip_download": True,
     }
 
-    cookies = os.getenv("YTDLP_COOKIES")
-    if cookies and os.path.exists(cookies):
-        opts["cookiefile"] = cookies
+    cookiefile = _yt_dlp_cookiefile()
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
 
     with YoutubeDL(opts) as ydl:
         if search:
@@ -414,9 +459,9 @@ def _search_best_youtube_entry(query: str, meta: Optional[MediaMeta] = None, cou
         "skip_download": True,
     }
 
-    cookies = os.getenv("YTDLP_COOKIES")
-    if cookies and os.path.exists(cookies):
-        opts["cookiefile"] = cookies
+    cookiefile = _yt_dlp_cookiefile()
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
 
     with YoutubeDL(opts) as ydl:
         result = ydl.extract_info(f"ytsearch{count}:{query}", download=False)
@@ -643,9 +688,9 @@ def _yt_dlp_opts(fmt: str, output_format: str) -> dict:
             {"key": "FFmpegExtractAudio", "preferredcodec": "opus", "preferredquality": "0"},
         ]
 
-    cookies = os.getenv("YTDLP_COOKIES")
-    if cookies and os.path.exists(cookies):
-        opts["cookiefile"] = cookies
+    cookiefile = _yt_dlp_cookiefile()
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
 
     return opts
 

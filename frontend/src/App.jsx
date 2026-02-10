@@ -1,6 +1,31 @@
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 
 const API_BASE = "";
+const HISTORY_KEY = "downtify_recent_inputs";
+const HISTORY_LIMIT = 10;
+const QUEUE_WORKERS = 3;
+
+class ApiError extends Error {
+  constructor(message, status = 0, detail = "") {
+    super(message);
+    this.status = status;
+    this.detail = detail;
+  }
+}
+
+async function parseErrorResponse(res, fallback) {
+  const raw = await res.text();
+  let detail = raw;
+  try {
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object" && parsed.detail) {
+      detail = String(parsed.detail);
+    }
+  } catch (_) {
+    // keep raw text if not JSON
+  }
+  return new ApiError(detail || fallback, res.status, detail || fallback);
+}
 
 async function postJson(path, payload) {
   const res = await fetch(`${API_BASE}${path}`, {
@@ -9,14 +34,16 @@ async function postJson(path, payload) {
     body: JSON.stringify(payload)
   });
   if (!res.ok) {
-    const text = await res.text();
-    throw new Error(text || "Error de servidor");
+    throw await parseErrorResponse(res, "Error de servidor");
   }
   return res.json();
 }
 
 export default function App() {
   const [input, setInput] = useState("");
+  const [recentInputs, setRecentInputs] = useState([]);
+  const [queue, setQueue] = useState([]);
+  const [nowTick, setNowTick] = useState(Date.now());
   const [meta, setMeta] = useState(null);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
@@ -24,6 +51,35 @@ export default function App() {
   const [playlistJobId, setPlaylistJobId] = useState("");
   const [playlistJob, setPlaylistJob] = useState(null);
   const readyTrackIds = new Set((playlistJob?.files || []).map((file) => String(file.id)));
+
+  const runningCount = useMemo(
+    () => queue.filter((item) => item.status === "resolving" || item.status === "downloading").length,
+    [queue]
+  );
+  const queueStats = useMemo(() => {
+    const total = queue.length;
+    const queued = queue.filter((item) => item.status === "queued").length;
+    const resolving = queue.filter((item) => item.status === "resolving").length;
+    const downloading = queue.filter((item) => item.status === "downloading").length;
+    const done = queue.filter((item) => item.status === "done").length;
+    const failed = queue.filter((item) => item.status === "error").length;
+    const completed = done + failed;
+    const progress = total ? Math.round((completed / total) * 100) : 0;
+    return { total, queued, resolving, downloading, done, failed, progress };
+  }, [queue]);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(HISTORY_KEY);
+      if (!raw) return;
+      const parsed = JSON.parse(raw);
+      if (Array.isArray(parsed)) {
+        setRecentInputs(parsed.filter((item) => typeof item === "string").slice(0, HISTORY_LIMIT));
+      }
+    } catch (_) {
+      // ignore invalid local storage content
+    }
+  }, []);
 
   useEffect(() => {
     if (!playlistJobId) return undefined;
@@ -51,43 +107,64 @@ export default function App() {
     return () => clearInterval(timer);
   }, [playlistJobId]);
 
-  const handlePreview = async () => {
+  useEffect(() => {
+    const available = Math.max(0, QUEUE_WORKERS - runningCount);
+    if (available === 0) return;
+    const pending = queue.filter((item) => item.status === "queued").slice(0, available);
+    if (!pending.length) return;
+    pending.forEach((item) => {
+      processQueueItem(item).catch(() => {
+        // queue item state handled inside processQueueItem
+      });
+    });
+  }, [queue, runningCount]);
+
+  useEffect(() => {
+    if (runningCount === 0) return undefined;
+    const t = setInterval(() => setNowTick(Date.now()), 1000);
+    return () => clearInterval(t);
+  }, [runningCount]);
+
+  const handlePasteAndDownload = () => {
+    const lines = splitBatchInput(input);
+    if (!lines.length) return;
     setError("");
-    setInfo("");
-    setPlaylistJobId("");
-    setPlaylistJob(null);
-    setStatus("loading");
-    try {
-      const data = await postJson("/api/preview", { input });
-      setMeta(data);
-      setStatus("ready");
-    } catch (err) {
-      setError("No pude resolver la entrada. Usa link de Spotify, YouTube o un titulo.");
-      setStatus("idle");
-    }
+    setInfo(`${lines.length} item(s) agregados a la cola.`);
+    addBatchToHistory(lines);
+    enqueueMany(lines);
+    setInput("");
   };
 
-  const handleDownload = async () => {
-    setError("");
-    setInfo("");
-    setStatus("downloading");
+  const processQueueItem = async (item) => {
+    updateQueueItem(item.id, { status: "resolving", error: "", startedAt: Date.now(), phase: "Resolviendo..." });
+    setStatus("loading");
+
     try {
-      if (isSpotifyPlaylistInput(input, meta)) {
-        const started = await postJson("/api/playlist/start", { input });
+      const data = await postJson("/api/preview", { input: item.input });
+      setMeta(data);
+
+      if (isSpotifyPlaylistInput(item.input, data)) {
+        setPlaylistJobId("");
+        setPlaylistJob(null);
+        const started = await postJson("/api/playlist/start", { input: item.input });
         const jobId = started.job_id;
-        if (!jobId) throw new Error("No se pudo iniciar el job de playlist");
+        if (!jobId) throw new ApiError("No se pudo iniciar el job de playlist");
         setPlaylistJobId(jobId);
         setInfo("Playlist en proceso. Puedes descargar canciones en cuanto aparezcan abajo.");
+        updateQueueItem(item.id, { status: "done", note: "Playlist iniciada", endedAt: Date.now(), phase: "Completado" });
+        setStatus("ready");
         return;
       }
 
+      updateQueueItem(item.id, { status: "downloading", phase: "Descargando archivo..." });
+      setStatus("downloading");
       const res = await fetch(`/api/download`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ input })
+        body: JSON.stringify({ input: item.input })
       });
       if (!res.ok) {
-        throw new Error("Error en descarga");
+        throw await parseErrorResponse(res, "Error en descarga");
       }
       const blob = await res.blob();
       const filename = getFileName(res.headers.get("Content-Disposition")) || "download.mp3";
@@ -97,11 +174,46 @@ export default function App() {
       document.body.appendChild(link);
       link.click();
       link.remove();
+      updateQueueItem(item.id, { status: "done", note: filename, endedAt: Date.now(), phase: "Completado" });
       setStatus("done");
     } catch (err) {
-      setError("No pude descargar. Intenta de nuevo.");
+      const friendlyError = mapApiError(err);
+      updateQueueItem(item.id, { status: "error", error: friendlyError, endedAt: Date.now(), phase: "Error" });
+      setError(`Error en cola: ${friendlyError}`);
       setStatus("ready");
     }
+  };
+
+  const addBatchToHistory = (values) => {
+    setRecentInputs((prev) => {
+      const merged = [...values, ...prev].filter((item, idx, arr) => arr.indexOf(item) === idx).slice(0, HISTORY_LIMIT);
+      window.localStorage.setItem(HISTORY_KEY, JSON.stringify(merged));
+      return merged;
+    });
+  };
+
+  const enqueueMany = (values) => {
+    const items = values.map((value) => ({
+      id: `${Date.now()}-${Math.random().toString(16).slice(2)}`,
+      input: value,
+      status: "queued",
+      error: "",
+      note: "",
+      phase: "En cola",
+      createdAt: Date.now(),
+      startedAt: null,
+      endedAt: null
+    }));
+    setQueue((prev) => [...prev, ...items]);
+  };
+
+  const updateQueueItem = (id, patch) => {
+    setQueue((prev) => prev.map((item) => (item.id === id ? { ...item, ...patch } : item)));
+  };
+
+  const retryQueueItem = (id) => {
+    updateQueueItem(id, { status: "queued", error: "", note: "", phase: "En cola", createdAt: Date.now(), startedAt: null, endedAt: null });
+    setError("");
   };
 
   return (
@@ -113,25 +225,33 @@ export default function App() {
           <p>Convierte links o texto en audio MP3, rapido y sin pasos extra.</p>
         </div>
         <div className="card">
-          <label>Spotify / YouTube / titulo</label>
+          <label>Spotify / YouTube / titulo (una o varias lineas)</label>
           <div className="input-row">
-            <input
-              type="text"
-              placeholder="https://open.spotify.com/... o https://youtube.com/... o titulo"
+            <textarea
+              className="input-field"
+              rows={3}
+              placeholder={"https://open.spotify.com/...\nhttps://youtube.com/...\nartista - cancion"}
               value={input}
               onChange={(e) => setInput(e.target.value)}
             />
-            <button onClick={handlePreview} disabled={!input || status === "loading"}>
-              {status === "loading" ? "Buscando..." : "Buscar"}
+            <button onClick={handlePasteAndDownload} disabled={!input.trim()}>
+              Pegar y Descargar
             </button>
           </div>
+          {!!recentInputs.length && (
+            <div className="history">
+              {recentInputs.map((value) => (
+                <button key={value} className="history-item" onClick={() => setInput(value)}>
+                  {value}
+                </button>
+              ))}
+            </div>
+          )}
           {info && <div className="hint">{info}</div>}
           {error && <div className="error">{error}</div>}
           {meta && (
             <div className="preview">
-              {meta.cover_url && (
-                <img src={meta.cover_url} alt="Cover" className="cover" />
-              )}
+              {meta.cover_url && <img src={meta.cover_url} alt="Cover" className="cover" />}
               <div className="meta">
                 <div className="title">{meta.title}</div>
                 {meta.artist && <div className="artist">{meta.artist}</div>}
@@ -140,11 +260,6 @@ export default function App() {
                 <div className="type">{meta.media_type || meta.source || "media"}</div>
               </div>
             </div>
-          )}
-          {meta && (
-            <button className="download" onClick={handleDownload} disabled={status === "downloading"}>
-              {status === "downloading" ? "Descargando..." : isSpotifyPlaylistInput(input, meta) ? "Descargar Playlist (ZIP)" : "Descargar MP3"}
-            </button>
           )}
           {playlistJob && (
             <div className="preview">
@@ -199,8 +314,43 @@ export default function App() {
               </div>
             </div>
           )}
+          {!!queue.length && (
+            <div className="queue">
+              <div className="queue-title">Cola de descargas</div>
+              <div className="queue-stats">
+                <div className="queue-stats-top">
+                  <span>{queueStats.done + queueStats.failed}/{queueStats.total} completados</span>
+                  <span>{queueStats.progress}%</span>
+                </div>
+                <div className="queue-progress">
+                  <div className="queue-progress-fill" style={{ width: `${queueStats.progress}%` }} />
+                </div>
+                <div className="queue-stats-grid">
+                  <span>Activos: {queueStats.resolving + queueStats.downloading}/{QUEUE_WORKERS}</span>
+                  <span>Pendientes: {queueStats.queued}</span>
+                  <span>OK: {queueStats.done}</span>
+                  <span>Error: {queueStats.failed}</span>
+                </div>
+              </div>
+              <div className="queue-list">
+                {queue.map((item) => (
+                  <div key={item.id} className={`queue-item ${item.status}`}>
+                    <div className="queue-text">
+                      <div className="queue-input">{item.input}</div>
+                      <div className="queue-note">{queueStatusLabel(item, nowTick)}</div>
+                    </div>
+                    {item.status === "error" && (
+                      <button className="retry" onClick={() => retryQueueItem(item.id)}>
+                        Reintentar
+                      </button>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="hint">
-            Soporta Spotify/YouTube/titulo. Descarga directa en MP3 y en playlists puedes bajar una a una o todo en ZIP.
+            Puedes pegar varias lineas y la app procesa hasta {QUEUE_WORKERS} items en paralelo.
           </div>
         </div>
       </div>
@@ -208,10 +358,51 @@ export default function App() {
   );
 }
 
+function splitBatchInput(raw) {
+  return (raw || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
 function getFileName(disposition) {
   if (!disposition) return null;
   const match = /filename="?([^\"]+)"?/i.exec(disposition);
   return match ? match[1] : null;
+}
+
+function queueStatusLabel(item, nowTick) {
+  const start = item.startedAt || item.createdAt;
+  const end = item.endedAt || nowTick;
+  const elapsed = start ? formatElapsed(end - start) : "";
+
+  if (item.status === "queued") return "En cola";
+  if (item.status === "resolving") return `Resolviendo metadata... ${elapsed}`;
+  if (item.status === "downloading") return `Descargando... ${elapsed}`;
+  if (item.status === "done") return `${item.note || "Completado"}${elapsed ? ` · ${elapsed}` : ""}`;
+  return `${item.error || "Error"}${elapsed ? ` · ${elapsed}` : ""}`;
+}
+
+function formatElapsed(ms) {
+  const total = Math.max(0, Math.floor(ms / 1000));
+  const minutes = Math.floor(total / 60);
+  const seconds = total % 60;
+  if (minutes > 0) {
+    return `${minutes}:${String(seconds).padStart(2, "0")}`;
+  }
+  return `${seconds}s`;
+}
+
+function mapApiError(err) {
+  const detail = String(err?.detail || err?.message || "Error desconocido");
+  const normalized = detail.toLowerCase();
+  if (normalized.includes("no youtube match found")) return "No encontre coincidencia en YouTube.";
+  if (normalized.includes("playlist page is not accessible")) return "La playlist parece privada o no accesible.";
+  if (normalized.includes("playlist job not found")) return "El job de playlist ya no existe.";
+  if (normalized.includes("youtube download failed")) return "YouTube rechazo la descarga. Intenta de nuevo o usa cookies.";
+  if (normalized.includes("missing input")) return "Entrada vacia. Pega un link o titulo.";
+  if (normalized.includes("timed out")) return "Tiempo de espera agotado. Reintenta.";
+  return detail.replace(/^error:\s*/i, "");
 }
 
 function isSpotifyPlaylistInput(input, meta) {

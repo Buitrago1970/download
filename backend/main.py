@@ -663,9 +663,8 @@ def _embed_metadata_m4a(file_path: str, meta: MediaMeta):
     audio.save()
 
 
-def _yt_dlp_opts(fmt: str, output_format: str) -> dict:
+def _yt_dlp_opts(fmt: Optional[str], output_format: str) -> dict:
     opts = {
-        "format": fmt,
         "outtmpl": "%(id)s.%(ext)s",
         "quiet": True,
         "no_warnings": True,
@@ -679,6 +678,8 @@ def _yt_dlp_opts(fmt: str, output_format: str) -> dict:
         "nocheckcertificate": True,
         "hls_prefer_native": True,
     }
+    if fmt:
+        opts["format"] = fmt
     if output_format == "mp3":
         opts["postprocessors"] = [
             {"key": "FFmpegExtractAudio", "preferredcodec": "mp3", "preferredquality": "0"},
@@ -719,18 +720,35 @@ def _find_generated_audio(tmpdir: str, fallback_id: Optional[str], output_format
     return None
 
 
-def _format_candidates(output_format: str) -> list[str]:
+def _format_candidates(output_format: str) -> list[Optional[str]]:
     if output_format == "m4a":
-        return ["bestaudio[ext=m4a]/bestaudio"]
+        return [
+            "bestaudio[ext=m4a]/bestaudio",
+            "bestaudio/best",
+            "best",
+            None,
+        ]
     if output_format == "opus":
-        return ["bestaudio[acodec*=opus]/bestaudio[ext=webm]/bestaudio"]
+        return [
+            "bestaudio[acodec*=opus]/bestaudio[ext=webm]/bestaudio",
+            "bestaudio/best",
+            "best",
+            None,
+        ]
     if output_format == "mp3":
         return [
             "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
             "bestaudio[ext=webm]/bestaudio/best",
             "bestaudio/best",
+            "best",
+            None,
         ]
-    return ["bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best"]
+    return [
+        "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best",
+        "bestaudio/best",
+        "best",
+        None,
+    ]
 
 
 def _download_audio(meta: MediaMeta, tmpdir: str, output_format: str = "best") -> str:

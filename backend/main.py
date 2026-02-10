@@ -751,6 +751,114 @@ def _format_candidates(output_format: str) -> list[Optional[str]]:
     ]
 
 
+def _is_requested_format_unavailable_error(exc: DownloadError) -> bool:
+    return "Requested format is not available" in str(exc)
+
+
+def _extract_youtube_entry_for_retry(target: str) -> Optional[dict]:
+    opts = {
+        "quiet": True,
+        "no_warnings": True,
+        "noplaylist": True,
+        "extract_flat": False,
+        "skip_download": True,
+    }
+    cookiefile = _yt_dlp_cookiefile()
+    if cookiefile:
+        opts["cookiefile"] = cookiefile
+
+    with YoutubeDL(opts) as ydl:
+        info = ydl.extract_info(target, download=False)
+
+    if not info:
+        return None
+    if target.startswith("ytsearch1:"):
+        entries = info.get("entries") or []
+        if not entries:
+            return None
+        first = entries[0]
+        if not isinstance(first, dict):
+            return None
+        return first
+    return info if isinstance(info, dict) else None
+
+
+def _pick_format_id_for_entry(entry: dict, output_format: str) -> Optional[str]:
+    formats = entry.get("formats") or []
+    if not formats:
+        return None
+
+    audio_only: list[dict] = []
+    progressive: list[dict] = []
+    for fmt in formats:
+        if not isinstance(fmt, dict):
+            continue
+        acodec = str(fmt.get("acodec") or "")
+        vcodec = str(fmt.get("vcodec") or "")
+        if acodec and acodec != "none" and (not vcodec or vcodec == "none"):
+            audio_only.append(fmt)
+        elif acodec and acodec != "none":
+            progressive.append(fmt)
+
+    pool = audio_only if audio_only else progressive
+    if not pool:
+        return None
+
+    def score(fmt: dict) -> tuple[int, float]:
+        ext = str(fmt.get("ext") or "").lower()
+        acodec = str(fmt.get("acodec") or "").lower()
+        abr = float(fmt.get("abr") or fmt.get("tbr") or 0.0)
+        pref = 0
+        if output_format == "m4a":
+            if ext == "m4a":
+                pref = 4
+            elif ext in {"mp4", "webm"}:
+                pref = 2
+        elif output_format == "opus":
+            if "opus" in acodec or ext == "opus":
+                pref = 4
+            elif ext == "webm":
+                pref = 3
+        else:
+            if ext in {"m4a", "webm", "mp4"}:
+                pref = 3
+            else:
+                pref = 1
+        return (pref, abr)
+
+    ranked = sorted(pool, key=score, reverse=True)
+    for fmt in ranked:
+        fmt_id = fmt.get("format_id")
+        if fmt_id:
+            return str(fmt_id)
+    return None
+
+
+def _smart_retry_with_available_format(
+    target: str, tmpdir: str, output_format: str
+) -> tuple[Optional[str], Optional[str]]:
+    try:
+        entry = _extract_youtube_entry_for_retry(target)
+        if not entry:
+            return None, None
+        retry_target = entry.get("webpage_url") or entry.get("url") or target
+        source_id = str(entry.get("id") or "") or None
+        format_id = _pick_format_id_for_entry(entry, output_format=output_format)
+        if not format_id:
+            return None, None
+
+        ydl_opts = _yt_dlp_opts(format_id, output_format=output_format)
+        ydl_opts["outtmpl"] = os.path.join(tmpdir, "%(id)s.%(ext)s")
+        with YoutubeDL(ydl_opts) as ydl:
+            downloaded = ydl.extract_info(str(retry_target), download=True)
+            if isinstance(downloaded, dict):
+                source_id = downloaded.get("id") or source_id
+        file_path = _find_generated_audio(tmpdir, source_id, output_format=output_format)
+        return file_path, format_id
+    except Exception:
+        return None, None
+
+
 def _download_audio(meta: MediaMeta, tmpdir: str, output_format: str = "best") -> str:
     if output_format not in OUTPUT_FORMATS:
         raise HTTPException(status_code=400, detail=f"Unsupported format: {output_format}")
@@ -786,6 +894,17 @@ def _download_audio(meta: MediaMeta, tmpdir: str, output_format: str = "best") -
                 if file_path:
                     return file_path
             except DownloadError as exc:
+                if _is_requested_format_unavailable_error(exc):
+                    recovered_path, recovered_format = _smart_retry_with_available_format(
+                        target, tmpdir, output_format=output_format
+                    )
+                    if recovered_path:
+                        return recovered_path
+                    if recovered_format:
+                        last_error = DownloadError(
+                            f"{exc}. Smart retry used format {recovered_format} but no file was produced."
+                        )
+                        continue
                 last_error = exc
                 continue
 

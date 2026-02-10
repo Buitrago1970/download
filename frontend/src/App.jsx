@@ -43,11 +43,13 @@ export default function App() {
   const [input, setInput] = useState("");
   const [recentInputs, setRecentInputs] = useState([]);
   const [queue, setQueue] = useState([]);
+  const [queueFilter, setQueueFilter] = useState("all");
   const [nowTick, setNowTick] = useState(Date.now());
   const [meta, setMeta] = useState(null);
   const [status, setStatus] = useState("idle");
   const [error, setError] = useState("");
   const [info, setInfo] = useState("");
+  const [toast, setToast] = useState("");
   const [playlistJobId, setPlaylistJobId] = useState("");
   const [playlistJob, setPlaylistJob] = useState(null);
   const readyTrackIds = new Set((playlistJob?.files || []).map((file) => String(file.id)));
@@ -67,6 +69,22 @@ export default function App() {
     const progress = total ? Math.round((completed / total) * 100) : 0;
     return { total, queued, resolving, downloading, done, failed, progress };
   }, [queue]);
+  const activeItem = useMemo(
+    () => queue.find((item) => item.status === "downloading" || item.status === "resolving") || null,
+    [queue]
+  );
+  const visibleQueue = useMemo(() => {
+    if (queueFilter === "active") {
+      return queue.filter((item) => item.status === "queued" || item.status === "resolving" || item.status === "downloading");
+    }
+    if (queueFilter === "error") {
+      return queue.filter((item) => item.status === "error");
+    }
+    if (queueFilter === "done") {
+      return queue.filter((item) => item.status === "done");
+    }
+    return queue;
+  }, [queue, queueFilter]);
 
   useEffect(() => {
     try {
@@ -124,6 +142,14 @@ export default function App() {
     const t = setInterval(() => setNowTick(Date.now()), 1000);
     return () => clearInterval(t);
   }, [runningCount]);
+
+  useEffect(() => {
+    const message = error || info;
+    if (!message) return undefined;
+    setToast(message);
+    const t = setTimeout(() => setToast(""), 3500);
+    return () => clearTimeout(t);
+  }, [error, info]);
 
   const handlePasteAndDownload = () => {
     const lines = splitBatchInput(input);
@@ -216,6 +242,26 @@ export default function App() {
     setError("");
   };
 
+  const retryFailedQueueItems = () => {
+    const failedItems = queue.filter((item) => item.status === "error");
+    if (!failedItems.length) return;
+    setQueue((prev) =>
+      prev.map((item) =>
+        item.status === "error"
+          ? { ...item, status: "queued", error: "", note: "", phase: "En cola", createdAt: Date.now(), startedAt: null, endedAt: null }
+          : item
+      )
+    );
+    setInfo(`Reintentando ${failedItems.length} item(s).`);
+  };
+
+  const clearCompletedQueueItems = () => {
+    const completed = queue.filter((item) => item.status === "done" || item.status === "error").length;
+    if (!completed) return;
+    setQueue((prev) => prev.filter((item) => item.status !== "done" && item.status !== "error"));
+    setInfo(`Se limpiaron ${completed} item(s) completados.`);
+  };
+
   return (
     <div className="page">
       <div className="hero">
@@ -225,6 +271,7 @@ export default function App() {
           <p>Convierte links o texto en audio MP3, rapido y sin pasos extra.</p>
         </div>
         <div className="card">
+          {!!toast && <div className="toast" aria-live="polite">{toast}</div>}
           <label>Spotify / YouTube / titulo (una o varias lineas)</label>
           <div className="input-row">
             <textarea
@@ -317,6 +364,13 @@ export default function App() {
           {!!queue.length && (
             <div className="queue">
               <div className="queue-title">Cola de descargas</div>
+              <div className="queue-live" aria-live="polite">
+                {runningCount > 0 && activeItem
+                  ? `Procesando: ${activeItem.input}`
+                  : queueStats.queued > 0
+                    ? "Esperando siguiente descarga..."
+                    : "Cola en espera"}
+              </div>
               <div className="queue-stats">
                 <div className="queue-stats-top">
                   <span>{queueStats.done + queueStats.failed}/{queueStats.total} completados</span>
@@ -332,8 +386,20 @@ export default function App() {
                   <span>Error: {queueStats.failed}</span>
                 </div>
               </div>
+              <div className="queue-toolbar">
+                <div className="queue-filters">
+                  <button className={`chip ${queueFilter === "all" ? "active" : ""}`} onClick={() => setQueueFilter("all")}>Todo</button>
+                  <button className={`chip ${queueFilter === "active" ? "active" : ""}`} onClick={() => setQueueFilter("active")}>Activos</button>
+                  <button className={`chip ${queueFilter === "error" ? "active" : ""}`} onClick={() => setQueueFilter("error")}>Errores</button>
+                  <button className={`chip ${queueFilter === "done" ? "active" : ""}`} onClick={() => setQueueFilter("done")}>Completados</button>
+                </div>
+                <div className="queue-actions">
+                  <button className="ghost" onClick={retryFailedQueueItems} disabled={queueStats.failed === 0}>Reintentar fallidas</button>
+                  <button className="ghost" onClick={clearCompletedQueueItems} disabled={queueStats.done + queueStats.failed === 0}>Limpiar completadas</button>
+                </div>
+              </div>
               <div className="queue-list">
-                {queue.map((item) => (
+                {visibleQueue.map((item) => (
                   <div key={item.id} className={`queue-item ${item.status}`}>
                     <div className="queue-text">
                       <div className="queue-input">{item.input}</div>

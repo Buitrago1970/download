@@ -74,6 +74,16 @@ body {
   backdrop-filter: blur(10px);
 }
 
+.toast {
+  margin-bottom: 10px;
+  border: 1px solid #2e4f83;
+  background: #12233f;
+  color: #cfe0ff;
+  border-radius: 12px;
+  padding: 10px 12px;
+  font-size: 0.82rem;
+}
+
 label {
   display: block;
   margin-bottom: 10px;
@@ -117,6 +127,7 @@ button {
   color: var(--accent-text);
   font-weight: 600;
   cursor: pointer;
+  min-height: 42px;
 }
 
 .input-row > button {
@@ -205,6 +216,12 @@ button:disabled {
 .queue-title {
   color: var(--muted);
   font-size: 0.82rem;
+  margin-bottom: 6px;
+}
+
+.queue-live {
+  font-size: 0.78rem;
+  color: #b4c3da;
   margin-bottom: 8px;
 }
 
@@ -249,6 +266,48 @@ button:disabled {
 .queue-list {
   display: grid;
   gap: 8px;
+}
+
+.queue-toolbar {
+  margin-bottom: 10px;
+}
+
+.queue-filters {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.chip {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  padding: 6px 10px;
+  font-size: 0.75rem;
+  min-height: 32px;
+}
+
+.chip.active {
+  color: #dfe9ff;
+  border-color: #4667a0;
+  background: #1a2537;
+}
+
+.queue-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.ghost {
+  background: transparent;
+  color: var(--muted);
+  border: 1px solid var(--border);
+  font-size: 0.75rem;
+  min-height: 34px;
+  padding: 7px 10px;
 }
 
 .queue-item {
@@ -340,12 +399,43 @@ button:disabled {
 }
 
 @media (max-width: 640px) {
+  .page {
+    align-items: flex-start;
+    padding: 16px 10px 88px;
+  }
+
+  .hero {
+    gap: 14px;
+  }
+
   .card {
-    padding: 16px;
+    padding: 14px;
+    border-radius: 14px;
+  }
+
+  .brand h1 {
+    font-size: clamp(1.9rem, 8vw, 2.4rem);
+  }
+
+  .brand p {
+    font-size: 0.92rem;
   }
 
   .input-row {
     flex-direction: column;
+  }
+
+  .input-row > button {
+    width: 100%;
+    position: sticky;
+    bottom: 10px;
+    z-index: 3;
+    box-shadow: 0 8px 20px rgba(0, 0, 0, 0.4);
+  }
+
+  .queue-input {
+    white-space: normal;
+    word-break: break-word;
   }
 
   .playlist-track {
@@ -356,5 +446,13 @@ button:disabled {
   .queue-item {
     flex-direction: column;
     align-items: flex-start;
+  }
+
+  .queue-actions {
+    width: 100%;
+  }
+
+  .ghost {
+    width: 100%;
   }
 }

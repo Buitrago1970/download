@@ -7,6 +7,7 @@ import threading
 import time
 import uuid
 import zipfile
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -75,17 +76,50 @@ def _is_spotify_playlist_url(value: str) -> bool:
 
 
 def _fetch_soup(url: str) -> Optional[BeautifulSoup]:
-    r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+    try:
+        r = requests.get(url, timeout=15, headers={"User-Agent": "Mozilla/5.0"})
+    except requests.RequestException:
+        return None
     if r.status_code != 200:
         return None
     return BeautifulSoup(r.text, "html.parser")
 
 
 def _get_oembed(url: str) -> dict:
-    r = requests.get("https://open.spotify.com/oembed", params={"url": url}, timeout=15)
+    try:
+        r = requests.get("https://open.spotify.com/oembed", params={"url": url}, timeout=15)
+    except requests.RequestException:
+        return {}
     if r.status_code != 200:
         return {}
-    return r.json()
+    try:
+        return r.json()
+    except ValueError:
+        return {}
+
+
+def _fallback_spotify_meta(url: str) -> MediaMeta:
+    kind = _spotify_kind(url) or "spotify"
+    spotify_id = _spotify_id(url)
+    if kind == "playlist":
+        title = "Spotify Playlist"
+    elif kind == "track":
+        title = "Spotify Track"
+    else:
+        title = "Spotify Item"
+
+    tags: dict[str, str] = {"Spotify URL": url}
+    if spotify_id:
+        tags["Spotify ID"] = spotify_id
+
+    return MediaMeta(
+        input_text=url,
+        source="spotify",
+        title=title,
+        media_type=kind,
+        query=title,
+        extra_tags=tags,
+    )
 
 
 def _parse_open_graph(soup: Optional[BeautifulSoup]) -> dict:
@@ -464,7 +498,11 @@ def resolve_input(value: str) -> MediaMeta:
         raise HTTPException(status_code=400, detail="Missing input")
 
     if _is_spotify_url(cleaned):
-        return resolve_spotify(cleaned)
+        try:
+            return resolve_spotify(cleaned)
+        except Exception:
+            # Spotify pages/oEmbed can fail intermittently due network/rate-limits.
+            return _fallback_spotify_meta(cleaned)
     if _is_youtube_url(cleaned):
         return resolve_youtube(cleaned)
     return resolve_text(cleaned)
@@ -883,6 +921,34 @@ def _append_job_file(job_id: str, file_entry: dict):
         PLAYLIST_JOBS[job_id]["files"].append(file_entry)
 
 
+def _playlist_workers(total_tracks: int) -> int:
+    raw = os.getenv("PLAYLIST_WORKERS", "3")
+    try:
+        workers = int(raw)
+    except ValueError:
+        workers = 3
+    workers = max(1, min(workers, 8))
+    return min(workers, max(total_tracks, 1))
+
+
+def _download_playlist_track(idx: int, track: MediaMeta, files_dir: str, output_format: str) -> dict:
+    with tempfile.TemporaryDirectory() as tmpdir:
+        file_path = _download_audio(track, tmpdir, output_format=output_format)
+        _embed_metadata(file_path, track)
+        ext = os.path.splitext(file_path)[1].lower() or ".bin"
+        output_name = f"{idx:03d} - {_safe_filename(track)}{ext}"
+        output_path = os.path.join(files_dir, output_name)
+        shutil.copy2(file_path, output_path)
+    return {
+        "id": str(idx),
+        "index": idx,
+        "title": track.title,
+        "artist": track.artist,
+        "filename": output_name,
+        "path": output_path,
+    }
+
+
 def _run_playlist_job(job_id: str, playlist_url: str, output_format: str):
     job_dir = tempfile.mkdtemp(prefix=f"downtify-{job_id[:8]}-")
     files_dir = os.path.join(job_dir, "files")
@@ -916,34 +982,22 @@ def _run_playlist_job(job_id: str, playlist_url: str, output_format: str):
 
         success_count = 0
         failed_count = 0
+        workers = _playlist_workers(total)
+        _set_job(job_id, {"current": f"Procesando en paralelo ({workers} workers)"})
 
-        for idx, track in enumerate(tracks, start=1):
-            _set_job(job_id, {"current": f"{idx}/{total}: {track.title}"})
-            try:
-                with tempfile.TemporaryDirectory() as tmpdir:
-                    file_path = _download_audio(track, tmpdir, output_format=output_format)
-                    _embed_metadata(file_path, track)
-                    ext = os.path.splitext(file_path)[1].lower() or ".bin"
-                    output_name = f"{idx:03d} - {_safe_filename(track)}{ext}"
-                    output_path = os.path.join(files_dir, output_name)
-                    shutil.copy2(file_path, output_path)
-                _append_job_file(
-                    job_id,
-                    {
-                        "id": str(idx),
-                        "index": idx,
-                        "title": track.title,
-                        "artist": track.artist,
-                        "filename": output_name,
-                        "path": output_path,
-                    },
-                )
-                success_count += 1
-                _set_job(job_id, {"done": success_count})
-            except Exception:
-                failed_count += 1
-                _set_job(job_id, {"failed": failed_count, "done": success_count})
-                continue
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            job_map = {
+                executor.submit(_download_playlist_track, idx, track, files_dir, output_format): (idx, track)
+                for idx, track in enumerate(tracks, start=1)
+            }
+            for future in as_completed(job_map):
+                try:
+                    file_entry = future.result()
+                    _append_job_file(job_id, file_entry)
+                    success_count += 1
+                except Exception:
+                    failed_count += 1
+                _set_job(job_id, {"done": success_count, "failed": failed_count})
 
         created_files = [name for name in os.listdir(files_dir) if name.lower().endswith((".mp3", ".m4a", ".opus", ".webm"))]
         if not created_files:

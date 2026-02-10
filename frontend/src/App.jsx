@@ -110,10 +110,10 @@ export default function App() {
         <div className="brand">
           <span className="tag">MVP</span>
           <h1>Downtify</h1>
-          <p>Pega Spotify, YouTube o un titulo y descargalo en MP3.</p>
+          <p>Convierte links o texto en audio MP3, rapido y sin pasos extra.</p>
         </div>
         <div className="card">
-          <label>Spotify / YouTube / Titulo</label>
+          <label>Spotify / YouTube / titulo</label>
           <div className="input-row">
             <input
               type="text"

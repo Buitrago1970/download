@@ -1,7 +1,17 @@
 :root {
-  font-family: "Space Grotesk", system-ui, sans-serif;
-  color: #0b0b10;
-  background: #f7f4ef;
+  --bg: #08090d;
+  --bg-soft: #12141b;
+  --card: rgba(16, 18, 24, 0.9);
+  --border: rgba(255, 255, 255, 0.1);
+  --text: #f3f5f8;
+  --muted: #9da3af;
+  --accent: #e8eaee;
+  --accent-text: #0d1015;
+  --ok: #18c47f;
+  --danger: #ff6a6a;
+  font-family: "Sora", "Avenir Next", "Segoe UI", sans-serif;
+  color: var(--text);
+  background: var(--bg);
 }
 
 * {
@@ -10,7 +20,11 @@
 
 body {
   margin: 0;
-  background: radial-gradient(circle at top left, #f7f4ef, #d7f0e3 50%, #f7f4ef 90%);
+  color: var(--text);
+  background:
+    radial-gradient(900px 420px at 0% 0%, #1f2230 0%, transparent 60%),
+    radial-gradient(700px 420px at 100% 100%, #151925 0%, transparent 60%),
+    var(--bg);
 }
 
 .page {
@@ -22,124 +36,131 @@ body {
 }
 
 .hero {
-  width: min(960px, 100%);
+  width: min(900px, 100%);
   display: grid;
-  gap: 32px;
-  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+  gap: 24px;
+  grid-template-columns: 1fr;
 }
 
 .brand h1 {
-  font-size: clamp(2.4rem, 3vw, 3.4rem);
-  margin: 0 0 12px;
-  letter-spacing: -0.02em;
+  margin: 0 0 10px;
+  font-size: clamp(2.2rem, 5vw, 3rem);
+  letter-spacing: -0.03em;
 }
 
 .brand p {
-  font-size: 1.1rem;
   margin: 0;
-  max-width: 420px;
-  color: #2c2c35;
+  color: var(--muted);
+  font-size: 1rem;
 }
 
 .tag {
   display: inline-block;
-  font-family: "Space Mono", monospace;
-  font-size: 0.8rem;
-  padding: 6px 10px;
+  margin-bottom: 14px;
+  padding: 4px 9px;
   border-radius: 999px;
-  background: #0b0b10;
-  color: #f7f4ef;
-  margin-bottom: 18px;
+  border: 1px solid var(--border);
+  color: var(--muted);
+  font-family: "IBM Plex Mono", monospace;
+  font-size: 0.75rem;
 }
 
 .card {
-  background: #ffffffcc;
-  border: 1px solid #e1ddd4;
-  border-radius: 20px;
-  padding: 24px;
-  box-shadow: 0 12px 40px rgba(14, 18, 24, 0.1);
-  backdrop-filter: blur(12px);
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  padding: 22px;
+  box-shadow: 0 20px 40px rgba(0, 0, 0, 0.35);
+  backdrop-filter: blur(10px);
 }
 
 label {
   display: block;
-  font-weight: 600;
   margin-bottom: 10px;
+  color: var(--muted);
+  font-size: 0.9rem;
 }
 
 .input-row {
   display: flex;
-  gap: 12px;
+  gap: 10px;
 }
 
 input {
   flex: 1;
   padding: 12px 14px;
   border-radius: 12px;
-  border: 1px solid #cbd2c3;
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  color: var(--text);
   font-size: 0.95rem;
 }
 
+input::placeholder {
+  color: #7d8391;
+}
+
 button {
-  padding: 12px 18px;
+  padding: 12px 16px;
   border-radius: 12px;
-  border: none;
-  background: #0b0b10;
-  color: #f7f4ef;
+  border: 1px solid transparent;
+  background: var(--accent);
+  color: var(--accent-text);
   font-weight: 600;
   cursor: pointer;
 }
 
 button:disabled {
-  opacity: 0.6;
+  opacity: 0.5;
   cursor: not-allowed;
 }
 
 .preview {
   display: grid;
-  grid-template-columns: 96px 1fr;
-  gap: 16px;
-  margin-top: 20px;
+  grid-template-columns: 82px 1fr;
+  gap: 14px;
+  margin-top: 18px;
   align-items: center;
 }
 
 .cover {
-  width: 96px;
-  height: 96px;
+  width: 82px;
+  height: 82px;
+  border-radius: 12px;
   object-fit: cover;
-  border-radius: 14px;
-  border: 1px solid #ddd7ce;
+  border: 1px solid var(--border);
 }
 
 .meta .title {
+  font-size: 1rem;
   font-weight: 700;
-  font-size: 1.05rem;
 }
 
 .meta .artist,
 .meta .album,
 .meta .type {
-  color: #484854;
-  font-size: 0.95rem;
-  margin-top: 4px;
+  margin-top: 3px;
+  color: var(--muted);
+  font-size: 0.9rem;
 }
 
 .download {
   width: 100%;
-  margin-top: 18px;
-  background: #1a6d50;
+  margin-top: 16px;
+  background: var(--ok);
+  color: #051b13;
 }
 
 .error {
   margin-top: 12px;
-  color: #b02525;
+  color: var(--danger);
   font-weight: 600;
 }
 
 .hint {
-  margin-top: 16px;
-  font-size: 0.85rem;
-  color: #4c4c56;
+  margin-top: 14px;
+  color: var(--muted);
+  font-size: 0.84rem;
 }
 
 .playlist-list {
@@ -150,32 +171,42 @@ button:disabled {
 
 .playlist-track {
   width: 100%;
+  padding: 10px 12px;
   text-align: left;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 12px;
-  transition: opacity 0.25s ease, transform 0.25s ease, background-color 0.25s ease;
+  gap: 10px;
+  color: var(--text);
+  border: 1px solid transparent;
+  transition: transform 0.2s ease, border-color 0.2s ease, opacity 0.2s ease;
 }
 
 .playlist-track.pending {
-  opacity: 0.4;
-  transform: scale(0.995);
-  background: #494957;
+  opacity: 0.45;
+  background: #20232d;
 }
 
 .playlist-track.ready {
-  opacity: 1;
-  background: #1a6d50;
+  background: #1e4636;
+  border-color: #2a6a52;
+}
+
+.playlist-track.ready:hover {
+  transform: translateY(-1px);
 }
 
 .track-state {
-  font-size: 0.78rem;
-  opacity: 0.9;
+  font-size: 0.76rem;
+  color: var(--muted);
   white-space: nowrap;
 }
 
 @media (max-width: 640px) {
+  .card {
+    padding: 16px;
+  }
+
   .input-row {
     flex-direction: column;
   }

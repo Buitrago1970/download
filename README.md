@@ -1,45 +1,40 @@
 # Downtify MVP
 
-MVP simple: pega un link de Spotify, YouTube o un titulo y descarga un MP3 con metadata y caratula embebida.
+App web para descargar audio desde Spotify, YouTube o texto libre. La UI actual es minimalista y oscura, con flujo directo de vista previa y descarga.
 
-## Que hace
-- Acepta input unificado: link publico de Spotify, link de YouTube o texto libre (titulo/cancion).
-- Resuelve metadata usando fuentes publicas (Spotify OpenGraph/oEmbed/JSON-LD y YouTube via yt-dlp).
-- Si llega Spotify o texto libre, busca en YouTube con ranking para priorizar audio oficial y evitar live/remix.
-- Si llega YouTube, descarga directo ese video.
-- Permite formato de salida: `best` (sin recodificar), `m4a`, `opus` o `mp3`.
-- Embebe metadata/carátula en `mp3` y `m4a`.
-- Si llega playlist de Spotify, crea un job en background y entrega un ZIP con multiples archivos de audio.
+## Funcionalidades
+- Input unico: URL de Spotify, URL de YouTube o texto (titulo/cancion).
+- Vista previa de metadata con `POST /api/preview`.
+- Descarga individual con `POST /api/download`.
+- Soporte de playlists de Spotify en segundo plano con `POST /api/playlist/start`, `GET /api/playlist/status/{job_id}`, `GET /api/playlist/file/{job_id}/{file_id}` y `GET /api/playlist/download/{job_id}`.
+- Metadata embebida (titulo, artista, album, cover y tags extra cuando existen).
 
-## Metadata embebida (sin credenciales de Spotify)
-- Basica: titulo, artista, album, caratula.
-- Extendida cuando existe: duracion, fecha de lanzamiento/publicacion, canal/uploader, source id/url (Spotify ID o YouTube ID).
+## Formato de salida actual
+Actualmente el backend esta configurado para descargar en `mp3` por defecto para canciones y tracks de playlist.
 
-## Limitaciones actuales
-- Sin OAuth de Spotify, solo se usa metadata publica de sus paginas.
-- Para playlists de Spotify sin credenciales, usa fallback publico y puede no traer todos los tracks.
-- La coincidencia de YouTube para texto o Spotify es automatica y puede variar.
-
-## Credenciales Spotify (opcionales, recomendado para playlists)
-Si defines credenciales, las playlists se resuelven con Spotify Web API y mejor cobertura:
+## Credenciales Spotify (opcionales)
+Si defines credenciales, la resolucion de playlists usa Spotify Web API y mejora cobertura:
 
 ```bash
 SPOTIFY_CLIENT_ID=tu_client_id
 SPOTIFY_CLIENT_SECRET=tu_client_secret
 ```
 
-Sin credenciales, el backend intenta resolver la playlist con extractor publico.
+Sin credenciales, se usa fallback publico.
 
-## Endpoints de playlist
-- `POST /api/playlist/start` con `{ \"input\": \"https://open.spotify.com/playlist/...\", \"format\": \"best|m4a|opus|mp3\" }`
-- `GET /api/playlist/status/{job_id}`
-- `GET /api/playlist/file/{job_id}/{file_id}` para descargar una cancion ya lista
-- `GET /api/playlist/download/{job_id}`
+## Rendimiento (playlists)
+La descarga de playlists ahora corre en paralelo. Puedes ajustar el numero de workers con:
 
-`/api/playlist/status/{job_id}` devuelve `files` con las canciones disponibles hasta el momento para descarga incremental.
+```bash
+PLAYLIST_WORKERS=3
+```
+
+Rango efectivo: `1` a `8` (por defecto `3`).
 
 ## Desarrollo local
+
 Backend:
+
 ```bash
 cd backend
 python -m venv .venv
@@ -49,20 +44,25 @@ uvicorn main:app --reload
 ```
 
 Frontend:
+
 ```bash
 cd frontend
 npm install
 npm run dev
 ```
 
-## Docker (recomendado)
+Con ambos procesos arriba, abre `http://localhost:5173`.
+
+## Docker
+
 ```bash
 docker compose up --build
 ```
+
 Abre `http://localhost:8000`.
 
-## YouTube cookies (opcional, recomendado si falla la descarga)
-YouTube puede bloquear descargas sin cookies. Si te pasa, exporta cookies de tu navegador y pásalas al contenedor:
+## YouTube cookies (opcional)
+Si YouTube bloquea descargas, puedes pasar un archivo de cookies:
 
 ```bash
 docker run --rm -p 8000:8000 \
@@ -70,5 +70,3 @@ docker run --rm -p 8000:8000 \
   -v /ruta/a/youtube.txt:/cookies/youtube.txt:ro \
   alacrandw-app:latest
 ```
-
-También puedes usar `docker compose` agregando `environment` y `volumes` en `docker-compose.yml`.
